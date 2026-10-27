@@ -1,0 +1,16 @@
+{# expects `lot`, optional `link_slots` #}
+{% for floor, fslots in lot.floors %}
+<div class="floor">
+  <div class="floor-lbl">FL {{ floor }}</div>
+  <div class="slots">
+    {% for s in fslots %}
+    {% if s.session_id %}<a href="{{ url_for('session_detail', session_id=s.session_id) }}"{% else %}<div{% endif %}
+      class="slot {{ s.status }}" data-slot="{{ s.slot_id }}" title="{{ s.slot_number }} · {{ s.slot_type }} · {{ s.status }}">
+      <span class="no">{{ s.slot_number }}</span>
+      <span class="ty">{{ s.slot_type }}</span>
+      <span class="who">{{ s.vehicle_number or s.status }}</span>
+    {% if s.session_id %}</a>{% else %}</div>{% endif %}
+    {% endfor %}
+  </div>
+</div>
+{% else %}<p class="muted">No slots configured.</p>{% endfor %}

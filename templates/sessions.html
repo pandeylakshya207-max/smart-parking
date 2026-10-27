@@ -1,0 +1,36 @@
+{% extends "base.html" %}{% block title %}Sessions{% endblock %}
+{% block content %}
+<div class="pagehead"><div><h1>Sessions &amp; billing</h1><p>Every entry/exit record in <span class="mono">parking_session</span>, with its payment.</p></div>
+<div class="tabs">
+  {% for key, label in [('all','All'),('active','Parked'),('unpaid','Unpaid'),('completed','Completed')] %}
+  <a href="{{ url_for('sessions', status=key) }}" class="{{ 'on' if status == key }}">{{ label }}</a>{% endfor %}
+</div></div>
+<section class="panel"><div class="bd flush tablewrap">
+{% if rows %}
+<table>
+  <thead><tr><th>#</th><th>Vehicle</th><th>Customer</th><th>Lot · slot</th><th>Entry</th><th>Exit</th><th class="num">Duration</th><th class="num">Amount</th><th>Status</th><th></th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+  <tr>
+    <td class="mono"><a href="{{ url_for('session_detail', session_id=r.session_id) }}">{{ r.session_id }}</a></td>
+    <td><span class="plate">{{ r.vehicle_number }}</span></td>
+    <td>{{ r.full_name }}</td>
+    <td>{{ r.lot_name.replace(' Parking','') }} · <b>{{ r.slot_number }}</b></td>
+    <td>{{ r.entry_time|dt }}</td>
+    <td>{{ r.exit_time|dt }}</td>
+    <td class="num">{% if r.session_status == 'Active' %}{{ r.hours|dur }}{% else %}{{ r.total_hours|dur }}{% endif %}</td>
+    <td class="num">{{ r.amount_due|inr }}</td>
+    <td>{% if r.session_status == 'Active' %}<span class="pill Active">Parked</span>
+        {% elif r.payment_id %}<span class="pill Paid">Paid · {{ r.payment_mode }}</span>
+        {% else %}<span class="pill Pending">Unpaid</span>{% endif %}</td>
+    <td>{% if r.session_status == 'Active' %}
+        <form class="inline" method="post" action="{{ url_for('session_exit', session_id=r.session_id) }}"><button class="btn sm danger">Exit</button></form>
+        {% elif not r.payment_id %}<a class="btn sm primary" href="{{ url_for('session_detail', session_id=r.session_id) }}">Collect</a>
+        {% else %}<a class="btn sm" href="{{ url_for('session_detail', session_id=r.session_id) }}">Receipt</a>{% endif %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<div class="empty">No sessions here.</div>{% endif %}
+</div></section>
+{% endblock %}

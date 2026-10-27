@@ -1,0 +1,51 @@
+{% extends "base.html" %}{% block title %}{{ lot.lot_name }}{% endblock %}
+{% block content %}
+<div class="pagehead"><div><h1>{{ lot.lot_name }}</h1><p>{{ lot.location }} · {{ lot.contact_number }} · occupancy <span class="mono">fn_occupancy_percent({{ lot.lot_id }})</span> = <b>{{ lot.occupancy }}%</b></p></div>
+<div class="stat" style="min-width:200px"><div class="k">Revenue <span class="dbnote">vw_revenue_per_lot</span></div><div class="v">{{ (revenue.total_revenue if revenue else 0)|inr }}</div><div class="s">{{ revenue.total_transactions if revenue else 0 }} payments</div></div></div>
+
+<section class="panel" style="margin-bottom:16px"><div class="hd"><h2>Slot map</h2>
+<div class="legend"><span class="Available">Available</span><span class="Occupied">Occupied</span><span class="Reserved">Reserved</span><span class="Maintenance">Maintenance</span></div></div>
+<div class="bd">{% include "_lotmap.html" %}</div></section>
+
+<div class="grid side">
+  <section class="panel"><div class="hd"><h2>Slots</h2></div><div class="bd flush tablewrap"><table>
+    <thead><tr><th>Slot</th><th>Floor</th><th>Type</th><th>Status</th><th>Vehicle</th><th></th></tr></thead>
+    <tbody>{% for s in lot.slots %}<tr>
+      <td class="mono"><b>{{ s.slot_number }}</b></td><td>{{ s.floor_number }}</td><td>{{ s.slot_type }}</td>
+      <td><span class="pill {{ s.status }}">{{ s.status }}</span></td>
+      <td>{% if s.vehicle_number %}<a href="{{ url_for('session_detail', session_id=s.session_id) }}"><span class="plate">{{ s.vehicle_number }}</span></a>{% elif s.status == 'Occupied' %}<span class="muted small">no active session</span>{% endif %}</td>
+      <td><form class="inline" method="post" action="{{ url_for('slot_status', slot_id=s.slot_id) }}">
+        {% if s.status == 'Available' %}<button class="btn sm" name="action" value="maintenance">Maintenance</button>
+        {% elif not s.vehicle_number %}<button class="btn sm" name="action" value="available">Set available</button>{% endif %}
+      </form></td>
+    </tr>{% endfor %}</tbody></table></div></section>
+
+  <div class="grid">
+    <section class="panel"><div class="hd"><h2>Rate card</h2><span class="dbnote">parking_rate</span></div><div class="bd">
+      <form class="stack" method="post" action="{{ url_for('update_rates', lot_id=lot.lot_id) }}">
+        {% for r in rates %}<label style="grid-template-columns:1fr 130px;align-items:center">{{ r.vehicle_type }} (₹/hour)
+          <input type="number" step="0.01" name="rate_{{ r.rate_id }}" value="{{ '%.2f'|format(r.rate_per_hour) }}" required></label>{% endfor %}
+        <button class="btn">Save rates</button>
+      </form></div></section>
+
+    <section class="panel"><div class="hd"><h2>Add slot</h2></div><div class="bd">
+      <form class="stack" method="post" action="{{ url_for('add_slot', lot_id=lot.lot_id) }}">
+        <div class="row"><label>Slot number<input class="mono" name="slot_number" required maxlength="10" placeholder="A5" style="text-transform:uppercase"></label>
+        <label>Floor<input type="number" name="floor_number" min="1" max="{{ lot.total_floors }}" value="1"></label></div>
+        <label>Type<select name="slot_type">{% for t in types %}<option>{{ t }}</option>{% endfor %}</select></label>
+        <button class="btn">Add slot</button>
+      </form></div></section>
+
+    <section class="panel"><div class="hd"><h2>Staff</h2></div><div class="bd flush"><table><tbody>
+      {% for st in staff %}<tr><td><b>{{ st.full_name }}</b><div class="small muted">{{ st.designation }} · {{ st.phone }}</div></td><td><span class="pill type">{{ st.shift }}</span></td></tr>
+      {% else %}<tr><td class="empty">No staff assigned.</td></tr>{% endfor %}</tbody></table>
+      <form class="stack" method="post" action="{{ url_for('add_staff', lot_id=lot.lot_id) }}" style="padding:16px;border-top:1px solid var(--line)">
+        <label>Name<input name="full_name" required maxlength="60"></label>
+        <div class="row"><label>Designation<input name="designation" required maxlength="30" placeholder="Attendant"></label>
+        <label>Shift<select name="shift">{% for sh in shifts %}<option>{{ sh }}</option>{% endfor %}</select></label></div>
+        <label>Phone<input name="phone" required maxlength="15"></label>
+        <button class="btn">Add staff</button>
+      </form></div></section>
+  </div>
+</div>
+{% endblock %}

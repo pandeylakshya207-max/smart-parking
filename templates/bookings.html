@@ -1,0 +1,74 @@
+{% extends "base.html" %}{% block title %}Bookings{% endblock %}
+{% block content %}
+<div class="pagehead"><div><h1>Advance bookings</h1><p>A confirmed booking reserves its slot. Check-in opens the session in that exact slot; cancelling releases it.</p></div></div>
+<div class="grid side">
+  <section class="panel"><div class="bd flush tablewrap">
+  {% if rows %}
+  <table>
+    <thead><tr><th>#</th><th>Customer</th><th>Vehicle</th><th>Slot</th><th>Window</th><th>Status</th><th></th></tr></thead>
+    <tbody>{% for b in rows %}
+    <tr>
+      <td class="mono">{{ b.booking_id }}</td>
+      <td>{{ b.full_name }}</td>
+      <td><span class="plate">{{ b.vehicle_number }}</span></td>
+      <td>{{ b.lot_name.replace(' Parking','') }} · <b>{{ b.slot_number }}</b></td>
+      <td class="small">{{ b.start_time|dt }}<br><span class="muted">to {{ b.end_time|dt }}</span></td>
+      <td><span class="pill {{ b.booking_status }}">{{ b.booking_status }}</span></td>
+      <td><div class="actions">
+        {% if b.booking_status == 'Confirmed' and not b.session_id %}
+          <form class="inline" method="post" action="{{ url_for('booking_checkin', booking_id=b.booking_id) }}"><button class="btn sm primary">Check in</button></form>
+          <form class="inline" method="post" action="{{ url_for('booking_cancel', booking_id=b.booking_id) }}" onsubmit="return confirm('Cancel booking #{{ b.booking_id }}?')"><button class="btn sm danger">Cancel</button></form>
+        {% elif b.session_id %}<a class="btn sm" href="{{ url_for('session_detail', session_id=b.session_id) }}">Session #{{ b.session_id }}</a>{% endif %}
+      </div></td>
+    </tr>{% endfor %}</tbody>
+  </table>
+  {% else %}<div class="empty">No bookings yet.</div>{% endif %}
+  </div></section>
+
+  <section class="panel">
+    <div class="hd"><h2>New booking</h2></div>
+    <div class="bd">
+      <form class="stack" method="post">
+        <label>Vehicle
+          <select name="vehicle_id" id="bk-vehicle" required>
+            <option value="">Choose…</option>
+            {% for v in vehicles %}<option value="{{ v.vehicle_id }}" data-type="{{ v.vehicle_type }}">{{ v.vehicle_number }} — {{ v.full_name }} ({{ v.vehicle_type }})</option>{% endfor %}
+          </select></label>
+        <label>Lot
+          <select id="bk-lot">{% for l in lots %}<option value="{{ l.lot_id }}">{{ l.lot_name }}</option>{% endfor %}</select></label>
+        <label>Slot
+          <select name="slot_id" id="bk-slot" required></select></label>
+        <label><span><input type="checkbox" id="bk-all" style="width:auto;margin-right:6px">Show every slot (to test the booking trigger)</span></label>
+        <div class="row">
+          <label>Start<input type="datetime-local" name="start_time" id="bk-start" required></label>
+          <label>End<input type="datetime-local" name="end_time" id="bk-end" required></label>
+        </div>
+        <button class="btn primary block">Confirm booking</button>
+        <p class="hint"><span class="mono">trg_before_booking_insert</span> rejects maintenance, taken or wrong-type slots; <span class="mono">chk_booking_time</span> rejects an end before the start.</p>
+      </form>
+    </div>
+  </section>
+</div>
+<script>
+const SLOTS = {{ slots|tojson }};
+const vSel = document.getElementById('bk-vehicle'), lSel = document.getElementById('bk-lot'),
+      sSel = document.getElementById('bk-slot'), all = document.getElementById('bk-all');
+function fill() {
+  const type = vSel.selectedOptions[0] && vSel.selectedOptions[0].dataset.type;
+  const lot = +lSel.value;
+  sSel.innerHTML = '';
+  const list = SLOTS.filter(s => s.lot_id === lot && (all.checked || (s.status === 'Available' && (!type || s.slot_type === type))));
+  if (!list.length) { sSel.innerHTML = '<option value="">No free ' + (type || '') + ' slots in this lot</option>'; return; }
+  for (const s of list) {
+    const o = document.createElement('option'); o.value = s.slot_id;
+    o.textContent = s.slot_number + ' · ' + s.slot_type + ' · floor ' + s.floor_number + (s.status !== 'Available' ? ' · ' + s.status : '');
+    sSel.appendChild(o);
+  }
+}
+[vSel, lSel, all].forEach(el => el.addEventListener('change', fill)); fill();
+const pad = n => String(n).padStart(2, '0');
+const fmt = d => d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+const t = new Date(); t.setMinutes(0, 0, 0); t.setHours(t.getHours() + 1);
+document.getElementById('bk-start').value = fmt(t); t.setHours(t.getHours() + 2); document.getElementById('bk-end').value = fmt(t);
+</script>
+{% endblock %}

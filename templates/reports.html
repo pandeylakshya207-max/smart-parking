@@ -1,0 +1,19 @@
+{% extends "base.html" %}{% block title %}SQL reports{% endblock %}
+{% block content %}
+<div class="pagehead"><div><h1>SQL reports</h1><p>The 17 test queries from Section 5 of the report, executed live against the current data. Results change as you use the system.</p></div></div>
+<div class="toc">{% for r in results %}<a href="#{{ r.code }}">{{ r.code }}</a>{% endfor %}</div>
+{% for r in results %}
+<section class="panel q" id="{{ r.code }}">
+  <div class="hd"><h2><span class="code">{{ r.code }}</span>{{ r.title }}</h2><span class="pill type">{{ r.concept }}</span></div>
+  <details class="sql"><summary>Show SQL</summary><pre class="code">{{ r.sql }}</pre></details>
+  <div class="bd flush tablewrap">
+    {% if r.error %}<div class="flash error" style="margin:12px">{{ r.error }}</div>
+    {% elif r.rows %}<table>
+      <thead><tr>{% for c in r.cols %}<th>{{ c }}</th>{% endfor %}</tr></thead>
+      <tbody>{% for row in r.rows %}<tr>{% for c in r.cols %}<td>{{ '—' if row[c] is none else row[c] }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+    </table><div class="small muted" style="padding:8px 14px;border-top:1px solid var(--line)">{{ r.rows|length }} row{{ 's' if r.rows|length != 1 }}</div>
+    {% else %}<div class="empty">0 rows returned — the query ran successfully, nothing matches right now.</div>{% endif %}
+  </div>
+</section>
+{% endfor %}
+{% endblock %}

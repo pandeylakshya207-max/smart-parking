@@ -1,0 +1,84 @@
+{% extends "base.html" %}{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div class="pagehead">
+  <div><h1>Live dashboard</h1><p>Slot states below come straight from <span class="mono">parking_slot.status</span>, kept current by the database triggers. Refreshes every 5 seconds.</p></div>
+  <div class="actions"><a class="btn primary lg" href="{{ url_for('entry') }}">+ Vehicle entry</a></div>
+</div>
+
+<div class="stats">
+  <div class="stat"><div class="k">Free slots</div><div class="v" id="st-free">{{ stats.free }}</div><div class="s">of {{ stats.slots }} configured</div></div>
+  <div class="stat"><div class="k">Parked now</div><div class="v">{{ stats.parked }}</div><div class="s">active sessions</div></div>
+  <div class="stat"><div class="k">Collected today</div><div class="v">{{ stats.today|inr }}</div><div class="s">{{ now.strftime('%d %b %Y') }}</div></div>
+  <div class="stat"><div class="k">Total revenue</div><div class="v">{{ stats.revenue|inr }}</div><div class="s">{{ stats.payments }} payments</div></div>
+  <div class="stat {{ 'warn' if stats.unpaid }}"><div class="k">Awaiting payment</div><div class="v">{{ stats.unpaid }}</div><div class="s"><a href="{{ url_for('sessions', status='unpaid') }}">view sessions</a></div></div>
+</div>
+
+<div class="grid side">
+  <div class="grid">
+    {% for lot in lots %}
+    <section class="panel">
+      <div class="hd">
+        <div class="lot-hd" style="flex:1">
+          <div><h2><a href="{{ url_for('lot_detail', lot_id=lot.lot_id) }}" style="color:inherit">{{ lot.lot_name }}</a></h2>
+          <div class="small muted">{{ lot.location }}</div></div>
+          <div class="occ-bar"><i id="occ-{{ lot.lot_id }}" style="width: {{ lot.occupancy or 0 }}%"></i></div>
+          <div class="occ-num" id="occn-{{ lot.lot_id }}" title="fn_occupancy_percent({{ lot.lot_id }})">{{ '%.0f'|format(lot.occupancy or 0) }}% full</div>
+        </div>
+      </div>
+      <div class="bd">{% include "_lotmap.html" %}</div>
+    </section>
+    {% endfor %}
+    <div class="legend"><span class="Available">Available</span><span class="Occupied">Occupied</span><span class="Reserved">Reserved</span><span class="Maintenance">Maintenance</span></div>
+  </div>
+
+  <div class="grid">
+    <section class="panel">
+      <div class="hd"><h2>Parked right now</h2><span class="dbnote">vw_active_sessions</span></div>
+      <div class="bd flush">
+        {% if active %}
+        <table><tbody>
+          {% for a in active %}
+          <tr>
+            <td><span class="plate">{{ a.vehicle_number }}</span><div class="small muted" style="margin-top:4px">{{ a.slot_number }} · {{ a.lot_name }}</div></td>
+            <td class="num"><div>{{ a.hours|dur }}</div>
+              <form class="inline" method="post" action="{{ url_for('session_exit', session_id=a.session_id) }}"><button class="btn sm danger" style="margin-top:4px">Exit</button></form></td>
+          </tr>
+          {% endfor %}
+        </tbody></table>
+        {% else %}<div class="empty">No vehicles parked.</div>{% endif %}
+      </div>
+    </section>
+    <section class="panel">
+      <div class="hd"><h2>Availability by type</h2><span class="dbnote">vw_slot_availability</span></div>
+      <div class="bd flush"><table>
+        <thead><tr><th>Lot</th><th>Type</th><th class="num">Free</th><th class="num">Total</th></tr></thead>
+        <tbody>{% for r in availability %}<tr><td>{{ r.lot_name.replace(' Parking','') }}</td><td>{{ r.slot_type }}</td><td class="num"><b>{{ r.available_slots }}</b></td><td class="num muted">{{ r.total_slots }}</td></tr>{% endfor %}</tbody>
+      </table></div>
+    </section>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function poll() {
+  setTimeout(function () {
+    fetch("{{ url_for('api_slots') }}").then(r => r.json()).then(d => {
+      let changed = false, free = 0;
+      for (const [id, s] of Object.entries(d.slots)) {
+        const el = document.querySelector('[data-slot="' + id + '"]');
+        if (s.status === 'Available') free++;
+        if (!el) continue;
+        if (!el.classList.contains(s.status)) { changed = true; }
+      }
+      if (changed) { location.reload(); return; }
+      for (const [id, l] of Object.entries(d.lots)) {
+        const bar = document.getElementById('occ-' + id), n = document.getElementById('occn-' + id);
+        if (bar) bar.style.width = (l.occupancy || 0) + '%';
+        if (n) n.textContent = Math.round(l.occupancy || 0) + '% full';
+      }
+      poll();
+    }).catch(poll);
+  }, 5000);
+})();
+</script>
+{% endblock %}

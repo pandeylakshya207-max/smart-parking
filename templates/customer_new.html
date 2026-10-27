@@ -1,0 +1,23 @@
+{% extends "base.html" %}{% block title %}Register customer{% endblock %}
+{% block content %}
+<div class="pagehead"><div><h1>Register customer</h1>
+<p>{% if lot_id %}After saving, the vehicle is parked in the lot you chose at the gate.{% else %}Creates a row in <span class="mono">customer</span> and, if a plate is given, in <span class="mono">vehicle</span>.{% endif %}</p></div></div>
+<section class="panel" style="max-width:640px"><div class="bd">
+<form class="stack" method="post">
+  <input type="hidden" name="lot_id" value="{{ lot_id or '' }}">
+  <h3>Owner</h3>
+  <label>Full name<input name="full_name" value="{{ form.full_name or '' }}" required maxlength="60"></label>
+  <div class="row">
+    <label>Phone<input name="phone" value="{{ form.phone or '' }}" required maxlength="15" pattern="[0-9+ ]{7,15}"></label>
+    <label>Email<input type="email" name="email" value="{{ form.email or '' }}" required maxlength="80"></label>
+  </div>
+  <label>Password<input type="password" name="password" required minlength="4"><span class="hint" style="font-weight:400">Stored as a salted hash in <span class="mono">password_hash</span>.</span></label>
+  <h3 style="margin-top:8px">Vehicle</h3>
+  <div class="row">
+    <label>Vehicle number<input class="mono" name="vehicle_number" value="{{ form.vehicle_number or '' }}" maxlength="15" {{ 'required' if lot_id }} style="text-transform:uppercase"></label>
+    <label>Type<select name="vehicle_type">{% for t in types %}<option {{ 'selected' if form.vehicle_type == t }}>{{ t }}</option>{% endfor %}</select></label>
+  </div>
+  <label>Make &amp; model (optional)<input name="model_name" value="{{ form.model_name or '' }}" maxlength="40"></label>
+  <button class="btn primary lg">{{ 'Register & park' if lot_id else 'Register' }}</button>
+</form></div></section>
+{% endblock %}

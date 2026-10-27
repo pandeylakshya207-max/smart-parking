@@ -1,0 +1,20 @@
+{% extends "base.html" %}{% block title %}Customers{% endblock %}
+{% block content %}
+<div class="pagehead"><div><h1>Customers</h1><p>{{ rows|length }} {{ 'match' if q else 'registered' }}{{ 'es' if q and rows|length != 1 }}.</p></div>
+<div class="actions">
+  <form method="get" style="display:flex;gap:6px"><input name="q" value="{{ q }}" placeholder="Name, phone, email or plate" style="width:260px"><button class="btn">Search</button></form>
+  <a class="btn primary" href="{{ url_for('new_customer') }}">+ Register customer</a>
+</div></div>
+<section class="panel"><div class="bd flush tablewrap">
+{% if rows %}<table>
+  <thead><tr><th>#</th><th>Name</th><th>Phone</th><th>Email</th><th>Vehicles</th><th>Registered</th></tr></thead>
+  <tbody>{% for c in rows %}<tr>
+    <td class="mono">{{ c.customer_id }}</td>
+    <td><a href="{{ url_for('customer_detail', customer_id=c.customer_id) }}"><b>{{ c.full_name }}</b></a></td>
+    <td>{{ c.phone }}</td><td>{{ c.email }}</td>
+    <td>{% for p in (c.plates or '').split(',') if p %}<span class="plate">{{ p }}</span> {% else %}<span class="muted">none</span>{% endfor %}</td>
+    <td>{{ c.registered_on }}</td>
+  </tr>{% endfor %}</tbody>
+</table>{% else %}<div class="empty">No customers found.</div>{% endif %}
+</div></section>
+{% endblock %}

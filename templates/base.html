@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{% endblock %} · Smart Parking</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="topbar"><div class="inner">
+  <a class="brand" href="{{ url_for('dashboard') }}"><span class="mark">P</span>Smart Parking</a>
+  {% set ep = request.endpoint or '' %}
+  <nav class="nav">
+    <a href="{{ url_for('dashboard') }}" class="{{ 'on' if ep == 'dashboard' }}">Dashboard</a>
+    <a href="{{ url_for('entry') }}" class="{{ 'on' if ep == 'entry' }}">Vehicle entry</a>
+    <a href="{{ url_for('sessions') }}" class="{{ 'on' if ep.startswith('session') }}">Sessions &amp; billing</a>
+    <a href="{{ url_for('bookings') }}" class="{{ 'on' if ep.startswith('booking') }}">Bookings</a>
+    <a href="{{ url_for('customers') }}" class="{{ 'on' if 'customer' in ep }}">Customers</a>
+    <a href="{{ url_for('lots') }}" class="{{ 'on' if ep.startswith('lot') }}">Lots &amp; rates</a>
+    <a href="{{ url_for('reports') }}" class="{{ 'on' if ep == 'reports' }}">SQL reports</a>
+  </nav>
+  <span class="engine">{{ engine }}</span>
+</div></header>
+<main>
+  {% with msgs = get_flashed_messages(with_categories=true) %}{% if msgs %}
+  <div class="flashes">{% for cat, m in msgs %}<div class="flash {{ cat }}"><div>{{ m }}</div></div>{% endfor %}</div>
+  {% endif %}{% endwith %}
+  {% block content %}{% endblock %}
+</main>
+{% block scripts %}{% endblock %}
+</body>
+</html>

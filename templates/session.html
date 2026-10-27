@@ -1,0 +1,64 @@
+{% extends "base.html" %}{% block title %}Session #{{ s.session_id }}{% endblock %}
+{% block content %}
+<div class="pagehead"><div><h1>Session #{{ s.session_id }}</h1>
+<p>{% if s.session_status == 'Active' %}Vehicle is inside. Exit closes the session; the bill is computed by the database.{% else %}Completed session — bill computed by <span class="mono">trg_before_session_update</span>.{% endif %}</p></div>
+<div class="actions"><a class="btn" href="{{ url_for('sessions') }}">All sessions</a></div></div>
+
+<div class="grid side">
+  <div class="ticket">
+    <div class="top">
+      <div><div class="lbl">Slot</div><div class="big">{{ s.slot_number }}</div><div class="small" style="color:#aeb4bc">Floor {{ s.floor_number }} · {{ s.lot_name }}</div></div>
+      <div style="text-align:right"><div class="lbl">Vehicle</div><div style="margin-top:6px"><span class="plate" style="font-size:15px">{{ s.vehicle_number }}</span></div>
+      <div style="margin-top:8px"><span class="pill {{ s.session_status }}">{{ s.session_status }}</span>
+      {% if s.booking_id %}<span class="pill Confirmed">Booking #{{ s.booking_id }}</span>{% else %}<span class="pill type">Walk-in</span>{% endif %}</div></div>
+    </div>
+    <dl>
+      <dt>Customer</dt><dd><a href="{{ url_for('customer_detail', customer_id=s.customer_id) }}">{{ s.full_name }}</a> · {{ s.phone }}</dd>
+      <dt>Vehicle</dt><dd>{{ s.model_name or '—' }} ({{ s.vehicle_type }})</dd>
+      <dt>Entry</dt><dd>{{ s.entry_time|dt }}</dd>
+      <dt>Exit</dt><dd>{{ s.exit_time|dt }}</dd>
+      <dt>Rate</dt><dd>{{ s.rate|inr }} / hour <span class="muted small">(parking_rate, {{ s.vehicle_type }})</span></dd>
+      <dt>Duration</dt><dd>{% if s.session_status == 'Active' %}{{ s.hours|dur }} so far{% else %}{{ s.total_hours|dur }} <span class="muted small">({{ s.total_hours }} h)</span>{% endif %}</dd>
+    </dl>
+    <div class="perf"></div>
+    <div class="total">
+      {% if s.session_status == 'Active' %}
+        <div><div class="muted small">Running estimate</div><div class="calc">{{ '%.2f'|format(s.billed_hours) }} h × {{ s.rate|inr }}{% if s.hours < 1 %} · 1 h minimum{% endif %}</div></div>
+        <div class="amt">{{ s.estimate|inr }}</div>
+      {% else %}
+        <div><div class="muted small">Amount due</div><div class="calc">{{ '%.2f'|format(s.billed_hours) }} h × {{ s.rate|inr }}{% if s.total_hours < 1 %} · 1 h minimum{% endif %}</div></div>
+        <div class="amt">{{ s.amount_due|inr }}</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <section class="panel">
+    {% if s.session_status == 'Active' %}
+      <div class="hd"><h2>Vehicle exit</h2></div>
+      <div class="bd">
+        <form method="post" action="{{ url_for('session_exit', session_id=s.session_id) }}" class="stack">
+          <button class="btn primary lg block">Exit &amp; generate bill</button>
+          <p class="hint">Calls <span class="mono">sp_vehicle_exit({{ s.session_id }})</span>. The trigger chain then computes hours and amount, marks the session Completed and frees slot {{ s.slot_number }}.</p>
+        </form>
+      </div>
+    {% elif payment %}
+      <div class="hd"><h2>Payment</h2><span class="pill {{ payment.payment_status }}">{{ payment.payment_status }}</span></div>
+      <div class="bd"><dl class="kv">
+        <dt>Receipt</dt><dd class="mono">#PAY-{{ '%05d'|format(payment.payment_id) }}</dd>
+        <dt>Amount</dt><dd><b>{{ payment.amount_paid|inr }}</b></dd>
+        <dt>Mode</dt><dd>{{ payment.payment_mode }}</dd>
+        <dt>Paid on</dt><dd>{{ payment.payment_date|dt }}</dd>
+      </dl></div>
+    {% else %}
+      <div class="hd"><h2>Collect payment</h2><span class="pill Unpaid">Unpaid</span></div>
+      <div class="bd">
+        <form method="post" action="{{ url_for('session_pay', session_id=s.session_id) }}" class="stack">
+          <div class="paymodes">{% for m in modes %}<label><input type="radio" name="payment_mode" value="{{ m }}" {{ 'checked' if loop.first }}><span>{{ m }}</span></label>{% endfor %}</div>
+          <button class="btn primary lg block">Record {{ s.amount_due|inr }}</button>
+          <p class="hint">Inserts into <span class="mono">payment</span>; the UNIQUE key on session_id prevents paying twice.</p>
+        </form>
+      </div>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

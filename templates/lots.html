@@ -1,0 +1,20 @@
+{% extends "base.html" %}{% block title %}Lots{% endblock %}
+{% block content %}
+<div class="pagehead"><div><h1>Parking lots</h1><p>Open a lot to manage its slots, rate card and staff.</p></div></div>
+<div class="grid cols-3">
+{% for lot in lots %}
+<a class="panel" href="{{ url_for('lot_detail', lot_id=lot.lot_id) }}" style="color:inherit;text-decoration:none">
+  <div class="hd"><div><h2>{{ lot.lot_name }}</h2><div class="small muted">{{ lot.location }}</div></div></div>
+  <div class="bd">
+    <div class="lot-hd" style="margin-bottom:12px"><div class="occ-bar"><i style="width: {{ lot.occupancy or 0 }}%"></i></div><div class="occ-num">{{ '%.0f'|format(lot.occupancy or 0) }}%</div></div>
+    <dl class="kv">
+      <dt>Floors</dt><dd>{{ lot.total_floors }}</dd>
+      <dt>Capacity</dt><dd>{{ lot.total_slots }} <span class="muted small">({{ lot.slots|length }} slots modelled)</span></dd>
+      <dt>Free</dt><dd><b style="color:var(--free)">{{ lot.counts.Available }}</b> · occupied {{ lot.counts.Occupied }} · reserved {{ lot.counts.Reserved }} · maintenance {{ lot.counts.Maintenance }}</dd>
+      <dt>Contact</dt><dd>{{ lot.contact_number }}</dd>
+    </dl>
+  </div>
+</a>
+{% endfor %}
+</div>
+{% endblock %}
