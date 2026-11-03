@@ -14,38 +14,49 @@
       <td class="mono"><b>{{ s.slot_number }}</b></td><td>{{ s.floor_number }}</td><td>{{ s.slot_type }}</td>
       <td><span class="pill {{ s.status }}">{{ s.status }}</span></td>
       <td>{% if s.vehicle_number %}<a href="{{ url_for('session_detail', session_id=s.session_id) }}"><span class="plate">{{ s.vehicle_number }}</span></a>{% elif s.status == 'Occupied' %}<span class="muted small">no active session</span>{% endif %}</td>
-      <td><form class="inline" method="post" action="{{ url_for('slot_status', slot_id=s.slot_id) }}">
+      <td>{% if user.is_manager %}<form class="inline" method="post" action="{{ url_for('slot_status', slot_id=s.slot_id) }}">
         {% if s.status == 'Available' %}<button class="btn sm" name="action" value="maintenance">Maintenance</button>
         {% elif not s.vehicle_number %}<button class="btn sm" name="action" value="available">Set available</button>{% endif %}
-      </form></td>
+      </form>{% endif %}</td>
     </tr>{% endfor %}</tbody></table></div></section>
 
   <div class="grid">
     <section class="panel"><div class="hd"><h2>Rate card</h2><span class="dbnote">parking_rate</span></div><div class="bd">
       <form class="stack" method="post" action="{{ url_for('update_rates', lot_id=lot.lot_id) }}">
         {% for r in rates %}<label style="grid-template-columns:1fr 130px;align-items:center">{{ r.vehicle_type }} (₹/hour)
-          <input type="number" step="0.01" name="rate_{{ r.rate_id }}" value="{{ '%.2f'|format(r.rate_per_hour) }}" required></label>{% endfor %}
-        <button class="btn">Save rates</button>
+          <input type="number" step="0.01" name="rate_{{ r.rate_id }}" value="{{ '%.2f'|format(r.rate_per_hour) }}" required {{ 'disabled' if not user.is_manager }}></label>{% endfor %}
+        {% if user.is_manager %}<button class="btn">Save rates</button>{% else %}<p class="hint">Only a Manager can change rates.</p>{% endif %}
       </form></div></section>
 
-    <section class="panel"><div class="hd"><h2>Add slot</h2></div><div class="bd">
+    {% if user.is_manager %}<section class="panel"><div class="hd"><h2>Add slot</h2></div><div class="bd">
       <form class="stack" method="post" action="{{ url_for('add_slot', lot_id=lot.lot_id) }}">
         <div class="row"><label>Slot number<input class="mono" name="slot_number" required maxlength="10" placeholder="A5" style="text-transform:uppercase"></label>
         <label>Floor<input type="number" name="floor_number" min="1" max="{{ lot.total_floors }}" value="1"></label></div>
         <label>Type<select name="slot_type">{% for t in types %}<option>{{ t }}</option>{% endfor %}</select></label>
         <button class="btn">Add slot</button>
-      </form></div></section>
+      </form></div></section>{% endif %}
 
     <section class="panel"><div class="hd"><h2>Staff</h2></div><div class="bd flush"><table><tbody>
-      {% for st in staff %}<tr><td><b>{{ st.full_name }}</b><div class="small muted">{{ st.designation }} · {{ st.phone }}</div></td><td><span class="pill type">{{ st.shift }}</span></td></tr>
+      {% for st in staff %}<tr><td class="wrap"><b>{{ st.full_name }}</b><div class="small muted">{{ st.designation }} · {{ st.phone }}{% if st.username %} · <span class="mono">{{ st.username }}</span>{% endif %}</div>
+        <div class="small muted">{% if st.username and not st.is_active %}<span class="pill Cancelled">Login disabled</span>{% elif st.last_login %}Last sign-in {{ st.last_login|dt }}{% elif st.username %}Never signed in{% else %}No login{% endif %}</div></td>
+        <td class="staff-act"><span class="pill type">{{ st.shift }}</span>
+        {% if user.is_manager and st.username and st.staff_id != user.staff_id %}
+          <form method="post" action="{{ url_for('toggle_staff_login', staff_id=st.staff_id) }}">
+            <button class="btn sm {{ 'danger' if st.is_active }}">{{ 'Disable login' if st.is_active else 'Enable login' }}</button>
+          </form>
+        {% endif %}</td></tr>
       {% else %}<tr><td class="empty">No staff assigned.</td></tr>{% endfor %}</tbody></table>
+      {% if user.is_manager %}
       <form class="stack" method="post" action="{{ url_for('add_staff', lot_id=lot.lot_id) }}" style="padding:16px;border-top:1px solid var(--line)">
         <label>Name<input name="full_name" required maxlength="60"></label>
-        <div class="row"><label>Designation<input name="designation" required maxlength="30" placeholder="Attendant"></label>
+        <div class="row"><label>Designation<select name="designation"><option>Attendant</option><option>Security</option><option>Manager</option></select></label>
         <label>Shift<select name="shift">{% for sh in shifts %}<option>{{ sh }}</option>{% endfor %}</select></label></div>
         <label>Phone<input name="phone" required maxlength="15"></label>
-        <button class="btn">Add staff</button>
-      </form></div></section>
+        <div class="row"><label>Login username<input name="username" required maxlength="40" pattern="[a-zA-Z0-9._\-]{3,40}" placeholder="first.last" autocapitalize="off"></label>
+        <label>Password<input type="password" name="password" required minlength="6" autocomplete="new-password"></label></div>
+        <button class="btn">Add staff &amp; create login</button>
+      </form>
+      {% endif %}</div></section>
   </div>
 </div>
 {% endblock %}

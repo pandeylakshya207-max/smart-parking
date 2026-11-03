@@ -244,3 +244,48 @@ pre.code {
 .panel, .grid > *, label, .row > * { min-width: 0; }
 select { max-width: 100%; text-overflow: ellipsis; }
 input { min-width: 0; }
+
+/* ---------- signed-in user ---------- */
+.who { display: flex; align-items: center; gap: 10px; padding-left: 14px; border-left: 1px solid #2c3239; }
+.who-txt { display: flex; flex-direction: column; line-height: 1.2; text-align: right; white-space: nowrap; }
+.who-txt b { color: #fff; font-size: 13px; font-weight: 600; }
+.who-txt span { color: #8d949c; font-size: 11px; }
+.btn.ghost { background: transparent; color: #c9ced4; border-color: #3a4048; }
+.btn.ghost:hover { background: #1f242a; color: #fff; }
+@media (max-width: 960px) { .who-txt, .topbar .engine { display: none; } }
+
+/* ---------- login ---------- */
+.login-body { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px;
+  background: radial-gradient(1200px 600px at 10% 0%, #e7edfc 0%, var(--bg) 60%); }
+.login-wrap { width: 100%; max-width: 960px; display: grid; grid-template-columns: 1fr 1fr;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
+  box-shadow: 0 24px 60px -24px rgba(17, 20, 24, .25); }
+.login-side { background: #111418; color: #c9ced4; padding: 40px; display: flex; flex-direction: column; gap: 14px; }
+.login-side .brand { margin-bottom: 18px; }
+.login-side h1 { color: #fff; font-size: 30px; }
+.login-side p { margin: 0; font-size: 15px; line-height: 1.6; }
+.login-points { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 8px; font-size: 14px; }
+.login-points b { color: #fff; }
+.login-foot { margin-top: auto; font-size: 12px; color: #6b737c; padding-top: 24px; }
+.login-card { padding: 40px; }
+.login-card h2 { font-size: 22px; }
+.demo-creds { margin-top: 22px; border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; font-size: 13px; }
+.demo-creds summary { cursor: pointer; font-weight: 600; color: var(--ink-2); }
+.demo-creds table { margin-top: 8px; }
+.demo-creds td { padding: 5px 4px; border-bottom: 1px solid var(--line); white-space: normal; }
+.demo-creds .hint { margin-top: 8px; }
+.engine-note { margin-top: 16px; text-align: right; }
+.engine-note .engine { color: var(--ink-3); border-color: var(--line-2); }
+@media (max-width: 760px) { .login-wrap { grid-template-columns: 1fr; } .login-side { padding: 28px; } .login-card { padding: 28px; } }
+
+/* keep the nav readable once the signed-in user block is in the top bar */
+@media (max-width: 1440px) {
+  .topbar .inner { gap: 14px; }
+  .topbar .engine { display: none; }
+  .nav a { padding: 7px 9px; }
+}
+@media (max-width: 1180px) {
+  .who-txt span { display: none; }
+}
+td.staff-act { width: 1%; text-align: right; vertical-align: top; }
+td.staff-act form { margin-top: 6px; }

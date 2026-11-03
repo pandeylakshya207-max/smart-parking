@@ -20,6 +20,10 @@ class ParkingFlow(unittest.TestCase):
         db.init_sqlite(force=True)
         app.config["TESTING"] = True
         self.c = app.test_client()
+        self.login("suresh.kumar")          # Manager, Central Mall
+
+    def login(self, username, password="staff@123"):
+        return self.c.post("/login", data={"username": username, "password": password})
 
     def q(self, sql, params=()):
         with app.app_context():
@@ -172,7 +176,8 @@ class ParkingFlow(unittest.TestCase):
                         follow_redirects=True)
         self.assertIn("Slot not added", r.get_data(as_text=True))
         self.c.post("/lots/1/staff", data={"full_name": "New Guard", "designation": "Security",
-                                          "shift": "Night", "phone": "9880099999"})
+                                          "shift": "Night", "phone": "9880099999",
+                                          "username": "new.guard", "password": "guard@1"})
         self.assertEqual(len(self.q("SELECT * FROM staff WHERE lot_id=1")), 3)
 
     def test_minimum_one_hour_charge(self):
@@ -183,6 +188,113 @@ class ParkingFlow(unittest.TestCase):
         self.assertLess(s["total_hours"], 0.1)
         self.assertEqual(s["amount_due"], 15.0)          # Bike @ ₹15, 1 h minimum
 
+
+class StaffLogin(unittest.TestCase):
+    def setUp(self):
+        db.init_sqlite(force=True)
+        app.config["TESTING"] = True
+        self.c = app.test_client()
+
+    def test_pages_require_login(self):
+        for url in ["/", "/entry", "/sessions", "/bookings", "/customers", "/lots/1", "/reports"]:
+            r = self.c.get(url)
+            self.assertEqual(r.status_code, 302, url)
+            self.assertIn("/login", r.location)
+        self.assertEqual(self.c.get("/api/slots").status_code, 401)
+        self.assertEqual(self.c.post("/entry", data={"vehicle_number": "KA03EF9012", "lot_id": 1}).status_code, 302)
+        with app.app_context():
+            self.assertEqual(db.query("SELECT COUNT(*) AS n FROM parking_session", one=True)["n"], 6)
+
+    def test_login_page_and_bad_password(self):
+        self.assertEqual(self.c.get("/login").status_code, 200)
+        r = self.c.post("/login", data={"username": "suresh.kumar", "password": "wrong"})
+        self.assertEqual(r.status_code, 401)
+        self.assertIn("Incorrect username or password", r.get_data(as_text=True))
+        r = self.c.post("/login", data={"username": "nobody", "password": "staff@123"})
+        self.assertEqual(r.status_code, 401)
+
+    def test_login_redirects_back_and_logout(self):
+        r = self.c.get("/reports")
+        nxt = r.location.split("next=")[1]
+        from urllib.parse import unquote
+        r = self.c.post("/login", data={"username": "  Manoj.Pillai ", "password": "staff@123", "next": unquote(nxt)})
+        self.assertEqual(r.location, "/reports")
+        html = self.c.get("/").get_data(as_text=True)
+        self.assertIn("Manoj Pillai", html)
+        with app.app_context():
+            self.assertIsNotNone(db.query("SELECT last_login FROM staff_account WHERE staff_id=2", one=True)["last_login"])
+        self.c.post("/logout")
+        self.assertEqual(self.c.get("/").status_code, 302)
+
+    def test_open_redirect_blocked(self):
+        r = self.c.post("/login", data={"username": "suresh.kumar", "password": "staff@123", "next": "//evil.example"})
+        self.assertEqual(r.location, "/")
+        r = self.c.post("/login", data={"username": "suresh.kumar", "password": "staff@123", "next": "https://evil.example"})
+        self.assertEqual(r.location, "/")
+
+    def test_attendant_cannot_change_rates_slots_or_staff(self):
+        self.c.post("/login", data={"username": "manoj.pillai", "password": "staff@123"})
+        with app.app_context():
+            rid = db.query("SELECT rate_id FROM parking_rate WHERE lot_id=1 AND vehicle_type='Car'", one=True)["rate_id"]
+            a1 = db.query("SELECT slot_id FROM parking_slot WHERE slot_number='A1'", one=True)["slot_id"]
+        r = self.c.post("/lots/1/rates", data={f"rate_{rid}": "99"}, follow_redirects=True)
+        self.assertIn("Only a Manager", r.get_data(as_text=True))
+        self.c.post(f"/slots/{a1}/status", data={"action": "maintenance"})
+        self.c.post("/lots/1/slots", data={"slot_number": "Z9", "floor_number": 1, "slot_type": "Car"})
+        self.c.post("/lots/1/staff", data={"full_name": "X", "designation": "Manager", "shift": "Night",
+                                          "phone": "1", "username": "xx.yy", "password": "secret1"})
+        with app.app_context():
+            self.assertEqual(db.query("SELECT rate_per_hour FROM parking_rate WHERE rate_id=%s", (rid,), one=True)["rate_per_hour"], 40)
+            self.assertEqual(db.query("SELECT status FROM parking_slot WHERE slot_id=%s", (a1,), one=True)["status"], "Available")
+            self.assertIsNone(db.query("SELECT 1 FROM parking_slot WHERE slot_number='Z9'", one=True))
+            self.assertIsNone(db.query("SELECT 1 FROM staff_account WHERE username='xx.yy'", one=True))
+        # but attendants can still run entry and exit
+        r = self.c.post("/entry", data={"vehicle_number": "KA03EF9012", "lot_id": 1})
+        self.assertIn("/sessions/", r.location)
+        html = self.c.get("/lots/1").get_data(as_text=True)
+        self.assertNotIn("Add staff", html)
+        self.assertIn("Only a Manager can change rates", html)
+
+    def test_manager_creates_staff_login(self):
+        self.c.post("/login", data={"username": "ravi.teja", "password": "staff@123"})
+        r = self.c.post("/lots/2/staff", data={"full_name": "Kavya Rao", "designation": "Attendant", "shift": "Evening",
+                                              "phone": "9880077777", "username": "kavya.rao", "password": "kavya@1"},
+                        follow_redirects=True)
+        self.assertIn("can now sign in as kavya.rao", r.get_data(as_text=True))
+        # duplicate username refused, and no orphan staff row is created
+        self.c.post("/lots/2/staff", data={"full_name": "Dup", "designation": "Attendant", "shift": "Evening",
+                                          "phone": "1", "username": "kavya.rao", "password": "kavya@1"})
+        with app.app_context():
+            self.assertEqual(db.query("SELECT COUNT(*) AS n FROM staff WHERE full_name='Dup'", one=True)["n"], 0)
+        self.c.post("/logout")
+        r = self.c.post("/login", data={"username": "kavya.rao", "password": "kavya@1"})
+        self.assertEqual(r.status_code, 302)
+        self.assertIn("Kavya Rao", self.c.get("/").get_data(as_text=True))
+
+    def test_deactivated_account_is_signed_out(self):
+        self.c.post("/login", data={"username": "manoj.pillai", "password": "staff@123"})
+        self.assertEqual(self.c.get("/").status_code, 200)
+        with app.app_context():
+            db.execute("UPDATE staff_account SET is_active = 0 WHERE staff_id = 2")
+        self.assertEqual(self.c.get("/").status_code, 302)
+        self.assertEqual(self.c.post("/login", data={"username": "manoj.pillai", "password": "staff@123"}).status_code, 401)
+
+
+    def test_manager_disables_and_enables_staff_login(self):
+        self.c.post("/login", data={"username": "suresh.kumar", "password": "staff@123"})
+        self.assertIn("Disable login", self.c.get("/lots/1").get_data(as_text=True))
+        r = self.c.post("/staff/2/login", follow_redirects=True)
+        self.assertIn("can no longer sign in", r.get_data(as_text=True))
+        r = self.c.post("/staff/1/login", follow_redirects=True)          # own account
+        self.assertIn("cannot disable your own login", r.get_data(as_text=True))
+        other = app.test_client()
+        self.assertEqual(other.post("/login", data={"username": "manoj.pillai", "password": "staff@123"}).status_code, 401)
+        self.c.post("/staff/2/login")
+        self.assertEqual(other.post("/login", data={"username": "manoj.pillai", "password": "staff@123"}).status_code, 302)
+        # an attendant cannot toggle anyone
+        other.post("/staff/1/login")
+        with app.app_context():
+            self.assertEqual(db.query("SELECT is_active FROM staff_account WHERE staff_id=1", one=True)["is_active"], 1)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

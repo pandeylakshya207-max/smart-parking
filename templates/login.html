@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Staff sign in · Smart Parking</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="login-body">
+<div class="login-wrap">
+  <section class="login-side">
+    <div class="brand"><span class="mark">P</span>Smart Parking</div>
+    <h1>Staff portal</h1>
+    <p>Sign in to run vehicle entry and exit, billing, bookings and reports for your parking lot.</p>
+    <ul class="login-points">
+      <li><b>Attendants &amp; security</b> — entry, exit, payments, bookings</li>
+      <li><b>Managers</b> — also slots, maintenance, rate card and staff</li>
+    </ul>
+    <div class="login-foot">Dayananda Sagar University · DBMS Mini Project</div>
+  </section>
+
+  <section class="login-card">
+    <h2>Employee sign in</h2>
+    <p class="muted" style="margin:4px 0 22px">Use the username your manager gave you.</p>
+    {% with msgs = get_flashed_messages(with_categories=true) %}{% if msgs %}
+      <div class="flashes">{% for cat, m in msgs %}<div class="flash {{ cat }}"><div>{{ m }}</div></div>{% endfor %}</div>
+    {% endif %}{% endwith %}
+    {% if error %}<div class="flashes"><div class="flash error"><div>{{ error }}</div></div></div>{% endif %}
+    <form class="stack" method="post" action="{{ url_for('login') }}">
+      <input type="hidden" name="next" value="{{ next }}">
+      <label>Username
+        <input name="username" value="{{ username }}" autocomplete="username" autocapitalize="off" spellcheck="false" required autofocus>
+      </label>
+      <label>Password
+        <input type="password" name="password" autocomplete="current-password" required>
+      </label>
+      <button class="btn primary lg block">Sign in</button>
+    </form>
+    <details class="demo-creds">
+      <summary>Demo accounts</summary>
+      <table>
+        <tbody>
+          <tr><td class="mono">suresh.kumar</td><td>Manager · Central Mall</td></tr>
+          <tr><td class="mono">ravi.teja</td><td>Manager · Tech Park</td></tr>
+          <tr><td class="mono">manoj.pillai</td><td>Attendant · Central Mall</td></tr>
+          <tr><td class="mono">lakshmi.devi</td><td>Attendant · Railway Station</td></tr>
+          <tr><td class="mono">ganesh.naik</td><td>Security · Tech Park</td></tr>
+        </tbody>
+      </table>
+      <p class="hint">Password for every demo account: <span class="mono">staff@123</span></p>
+    </details>
+    <div class="engine-note"><span class="engine">{{ engine }}</span></div>
+  </section>
+</div>
+</body>
+</html>

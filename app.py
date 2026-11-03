@@ -7,11 +7,12 @@ Then open http://127.0.0.1:5000
 """
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
+from functools import wraps
 
-from flask import (Flask, abort, flash, jsonify, redirect, render_template,
-                   request, url_for)
-from werkzeug.security import generate_password_hash
+from flask import (Flask, abort, flash, g, jsonify, redirect, render_template,
+                   request, session, url_for)
+from werkzeug.security import check_password_hash, generate_password_hash
 
 import db
 from db import DBError
@@ -19,7 +20,15 @@ from reports import REPORT_QUERIES
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "spms-dev-key")
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",                 # blocks cross-site form posts (CSRF)
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=9),  # one shift
+)
 app.teardown_appcontext(db.close_conn)
+
+STAFF_HASH = "pbkdf2:sha256:100000"   # fast enough for a 0.1-CPU host, still salted + iterated
+PUBLIC_ENDPOINTS = {"login", "static"}
 
 VEHICLE_TYPES = ["Car", "Bike", "EV", "Handicap"]
 PAYMENT_MODES = ["UPI", "Cash", "Card", "Wallet"]
@@ -67,7 +76,85 @@ def fmt_dt(v):
 
 @app.context_processor
 def inject_globals():
-    return {"engine": db.engine_label(), "now": datetime.now()}
+    return {"engine": db.engine_label(), "now": datetime.now(), "user": g.get("user")}
+
+
+# --------------------------------------------------------------------------
+# staff authentication
+# --------------------------------------------------------------------------
+def load_staff(staff_id):
+    return db.query("""SELECT st.staff_id, st.full_name, st.designation, st.shift, st.lot_id,
+                              pl.lot_name, sa.username, sa.is_active
+                       FROM staff_account sa
+                       JOIN staff st       ON st.staff_id = sa.staff_id
+                       JOIN parking_lot pl ON pl.lot_id   = st.lot_id
+                       WHERE sa.staff_id = %s""", (staff_id,), one=True)
+
+
+def safe_next(target):
+    """Only allow redirects back into this site."""
+    if target and target.startswith("/") and not target.startswith("//") and "\\" not in target:
+        return target
+    return url_for("dashboard")
+
+
+@app.before_request
+def require_login():
+    g.user = None
+    if request.endpoint in PUBLIC_ENDPOINTS or request.endpoint is None:
+        return None
+    sid = session.get("staff_id")
+    if sid:
+        u = load_staff(sid)
+        if u and u["is_active"]:
+            u["is_manager"] = u["designation"].strip().lower() == "manager"
+            g.user = u
+            return None
+        session.clear()
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "login required"}), 401
+    return redirect(url_for("login", next=request.full_path.rstrip("?")))
+
+
+def manager_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if not g.user or not g.user["is_manager"]:
+            flash("Only a Manager can change slots, rates or staff.", "error")
+            return redirect(request.referrer or url_for("dashboard"))
+        return view(*args, **kwargs)
+    return wrapped
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if session.get("staff_id") and request.method == "GET":
+        return redirect(url_for("dashboard"))
+    error = None
+    username = ""
+    if request.method == "POST":
+        username = (request.form.get("username") or "").strip().lower()
+        password = request.form.get("password") or ""
+        acct = db.query("SELECT staff_id, password_hash, is_active FROM staff_account WHERE username = %s",
+                        (username,), one=True)
+        if acct and acct["is_active"] and check_password_hash(acct["password_hash"], password):
+            session.clear()
+            session.permanent = True
+            session["staff_id"] = acct["staff_id"]
+            db.execute("UPDATE staff_account SET last_login = NOW() WHERE staff_id = %s", (acct["staff_id"],))
+            u = load_staff(acct["staff_id"])
+            flash(f"Welcome, {u['full_name']} ({u['designation']}, {u['lot_name']}).", "success")
+            return redirect(safe_next(request.form.get("next")))
+        error = "Incorrect username or password."
+    return render_template("login.html", error=error, username=username,
+                           next=request.values.get("next", "")), (401 if error else 200)
+
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    session.clear()
+    flash("You have been signed out.", "info")
+    return redirect(url_for("login"))
 
 
 def rate_for(slot_id, vehicle_id):
@@ -431,13 +518,16 @@ def lot_detail(lot_id):
     if not lot:
         abort(404)
     rates = db.query("SELECT * FROM parking_rate WHERE lot_id = %s ORDER BY rate_id", (lot_id,))
-    staff = db.query("SELECT * FROM staff WHERE lot_id = %s ORDER BY staff_id", (lot_id,))
+    staff = db.query("""SELECT st.*, sa.username, sa.last_login, sa.is_active FROM staff st
+                        LEFT JOIN staff_account sa ON sa.staff_id = st.staff_id
+                        WHERE st.lot_id = %s ORDER BY st.staff_id""", (lot_id,))
     revenue = db.query("SELECT * FROM vw_revenue_per_lot WHERE lot_id = %s", (lot_id,), one=True)
     return render_template("lot.html", lot=lot, rates=rates, staff=staff, revenue=revenue,
                            types=VEHICLE_TYPES, shifts=SHIFTS)
 
 
 @app.route("/lots/<int:lot_id>/slots", methods=["POST"])
+@manager_required
 def add_slot(lot_id):
     f = request.form
     try:
@@ -451,6 +541,7 @@ def add_slot(lot_id):
 
 
 @app.route("/slots/<int:slot_id>/status", methods=["POST"])
+@manager_required
 def slot_status(slot_id):
     action = request.form.get("action")
     sl = db.query("SELECT lot_id, status FROM parking_slot WHERE slot_id = %s", (slot_id,), one=True)
@@ -478,6 +569,7 @@ def slot_status(slot_id):
 
 
 @app.route("/lots/<int:lot_id>/rates", methods=["POST"])
+@manager_required
 def update_rates(lot_id):
     changed, errors = 0, []
     for key, val in request.form.items():
@@ -497,15 +589,48 @@ def update_rates(lot_id):
 
 
 @app.route("/lots/<int:lot_id>/staff", methods=["POST"])
+@manager_required
 def add_staff(lot_id):
     f = request.form
+    username = (f.get("username") or "").strip().lower()
+    password = f.get("password") or ""
+    if not re.fullmatch(r"[a-z0-9._-]{3,40}", username):
+        flash("Username must be 3–40 characters: letters, digits, dot, dash or underscore.", "error")
+        return redirect(url_for("lot_detail", lot_id=lot_id))
+    if len(password) < 6:
+        flash("Password must be at least 6 characters.", "error")
+        return redirect(url_for("lot_detail", lot_id=lot_id))
+    if db.query("SELECT 1 FROM staff_account WHERE username = %s", (username,), one=True):
+        flash(f"Username {username} is already taken.", "error")
+        return redirect(url_for("lot_detail", lot_id=lot_id))
+    sid = None
     try:
-        db.execute("INSERT INTO staff (lot_id, full_name, designation, shift, phone) VALUES (%s, %s, %s, %s, %s)",
-                   (lot_id, f["full_name"].strip(), f["designation"].strip(), f["shift"], f["phone"].strip()))
-        flash(f"{f['full_name']} added to staff.", "success")
+        sid = db.execute("INSERT INTO staff (lot_id, full_name, designation, shift, phone) VALUES (%s, %s, %s, %s, %s)",
+                         (lot_id, f["full_name"].strip(), f["designation"], f["shift"], f["phone"].strip()))
+        db.execute("INSERT INTO staff_account (staff_id, username, password_hash) VALUES (%s, %s, %s)",
+                   (sid, username, generate_password_hash(password, method=STAFF_HASH)))
+        flash(f"{f['full_name']} added to staff and can now sign in as {username}.", "success")
     except DBError as e:
+        if sid:   # don't leave an employee row without a login
+            db.execute("DELETE FROM staff WHERE staff_id = %s", (sid,))
         flash(f"Staff not added: {e}", "error")
     return redirect(url_for("lot_detail", lot_id=lot_id))
+
+
+@app.route("/staff/<int:staff_id>/login", methods=["POST"])
+@manager_required
+def toggle_staff_login(staff_id):
+    acct = db.query("""SELECT sa.is_active, st.full_name, st.lot_id FROM staff_account sa
+                       JOIN staff st ON st.staff_id = sa.staff_id WHERE sa.staff_id = %s""", (staff_id,), one=True)
+    if not acct:
+        abort(404)
+    if staff_id == g.user["staff_id"]:
+        flash("You cannot disable your own login.", "error")
+    else:
+        new = 0 if acct["is_active"] else 1
+        db.execute("UPDATE staff_account SET is_active = %s WHERE staff_id = %s", (new, staff_id))
+        flash(f"{acct['full_name']} can {'now' if new else 'no longer'} sign in.", "success")
+    return redirect(url_for("lot_detail", lot_id=acct["lot_id"]))
 
 
 # --------------------------------------------------------------------------

@@ -15,6 +15,26 @@ and shows the result.
 | Lots & rates | Slot map, maintenance on/off, add slots, edit rate card, staff | `parking_slot`, `parking_rate`, `staff`, `vw_revenue_per_lot` |
 | SQL reports | The 17 queries from Section 5 of the report, run live | joins, subqueries, GROUP BY/HAVING, window function, views |
 
+## Employee login
+
+Every page requires a staff sign-in. Accounts live in the `staff_account` table (one per row of
+`staff`, password stored as a salted PBKDF2 hash). The role comes from `staff.designation`:
+
+| Username | Role | Lot |
+|---|---|---|
+| `suresh.kumar` | Manager | Central Mall |
+| `ravi.teja` | Manager | Tech Park |
+| `manoj.pillai` | Attendant | Central Mall |
+| `lakshmi.devi` | Attendant | Railway Station |
+| `ganesh.naik` | Security | Tech Park |
+
+Demo password for all of them: **`staff@123`**.
+
+- **Attendants and security** can run entry, exit, billing, payments, bookings, customers and reports.
+- **Managers** can also add slots, switch maintenance on and off, edit the rate card, and add staff
+  (giving each new employee a username and password) or deactivate a staff login.
+- Sessions last one shift (9 hours); **Sign out** is in the top-right corner.
+
 ---
 
 ## Option A — run with MySQL (the real project)

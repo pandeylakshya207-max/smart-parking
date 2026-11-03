@@ -20,6 +20,12 @@
     <a href="{{ url_for('reports') }}" class="{{ 'on' if ep == 'reports' }}">SQL reports</a>
   </nav>
   <span class="engine">{{ engine }}</span>
+  {% if user %}
+  <div class="who">
+    <div class="who-txt"><b>{{ user.full_name }}</b><span>{{ user.designation }} · {{ user.lot_name.replace(' Parking','') }}</span></div>
+    <form method="post" action="{{ url_for('logout') }}"><button class="btn sm ghost" title="Sign out">Sign out</button></form>
+  </div>
+  {% endif %}
 </div></header>
 <main>
   {% with msgs = get_flashed_messages(with_categories=true) %}{% if msgs %}

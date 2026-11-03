@@ -62,7 +62,7 @@
 <script>
 (function poll() {
   setTimeout(function () {
-    fetch("{{ url_for('api_slots') }}").then(r => r.json()).then(d => {
+    fetch("{{ url_for('api_slots') }}").then(r => { if (r.status === 401) { location.reload(); throw 0; } return r.json(); }).then(d => {
       let changed = false, free = 0;
       for (const [id, s] of Object.entries(d.slots)) {
         const el = document.querySelector('[data-slot="' + id + '"]');
