@@ -1,19 +1,26 @@
 # Smart Parking Management System — working model
 
-A web application on top of the MySQL database designed in the DBMS project report.
-All the parking logic (slot occupancy, billing, freeing slots, booking rules) runs
-**inside the database** as triggers and stored procedures; the web app just calls them
-and shows the result.
+A web application on a **hybrid database**:
+
+- **MySQL** holds every record that must be exact and linked: customers, vehicles, slots,
+  bookings, sessions, bills, payments, staff logins. The design is normalised so each fact is
+  stored once; anything that can be calculated (slot status, hours, session status) is
+  calculated, and triggers and constraints refuse every insert, update and delete anomaly.
+- **MongoDB** holds data whose shape varies from lot to lot: lot profiles with nested opening
+  hours, amenities and EV chargers, and free-text customer reviews.
+
+The two are joined in the application by `lot_id` and `session_id`.
 
 | Screen | What it does | Database objects used |
 | --- | --- | --- |
-| Dashboard | Live slot map of every lot, occupancy bars, who is parked now, revenue | `vw_active_sessions`, `vw_slot_availability`, `fn_occupancy_percent()` |
-| Vehicle entry | Type a plate, pick a lot → first free slot of the right type is allocated | `sp_vehicle_entry`, `trg_after_session_insert` |
-| Sessions & billing | Exit a vehicle → hours and bill computed → collect payment | `sp_vehicle_exit`, `trg_before_session_update`, `trg_after_session_exit`, `payment` |
-| Bookings | Reserve a slot, check in against the booking, or cancel | `trg_before_booking_insert`, `trg_after_booking_insert`, `trg_after_booking_cancel`, `sp_booking_checkin` |
+| Dashboard | Live slot map of every lot, occupancy bars, who is parked now, revenue | `vw_slot_status`, `vw_active_sessions`, `vw_slot_availability`, `fn_occupancy_percent()` |
+| Vehicle entry | Type a plate, pick a lot → first free slot of the right type is allocated | `sp_vehicle_entry`, `trg_before_session_insert` |
+| Sessions & billing | Exit a vehicle → bill computed → collect payment → leave a review | `sp_vehicle_exit`, `trg_before_session_update`, `trg_before_payment_insert`, Mongo `reviews` |
+| Bookings | Reserve a slot, check in against the booking, or cancel | `trg_before_booking_insert`, `trg_before_booking_update`, `sp_booking_checkin` |
 | Customers | Register customers and vehicles (passwords stored hashed), parking history | `customer`, `vehicle` |
-| Lots & rates | Slot map, maintenance on/off, add slots, edit rate card, staff | `parking_slot`, `parking_rate`, `staff`, `vw_revenue_per_lot` |
-| SQL reports | The 17 queries from Section 5 of the report, run live | joins, subqueries, GROUP BY/HAVING, window function, views |
+| Lots & rates | Slot map, maintenance, rate card, staff, lot profile, chargers, reviews | `parking_slot`, `parking_rate`, `staff`, `vw_revenue_per_lot`, Mongo `lot_profiles` |
+| SQL reports | The 17 SQL test queries, run live | joins, subqueries, GROUP BY/HAVING, window function, views |
+| MongoDB | Collections, nested documents, 4 nested queries, SQL + Mongo combined | `lot_profiles`, `reviews`, `$elemMatch`, dot notation, aggregation |
 
 ## Employee login
 
@@ -98,9 +105,9 @@ The badge in the top-right corner shows which engine is running.
 1. **Dashboard** — point out the three lots, the colour-coded slots and the occupancy bars
    (`fn_occupancy_percent`).
 2. **Vehicle entry** → plate `KA01AB1234`, lot *Central Mall* → the procedure allocates **A1**
-   and the slot turns red on the dashboard (trigger).
+   and the slot turns red on the dashboard (its status is calculated from the new session).
 3. On the ticket, press **Exit & generate bill** → hours and amount appear; the slot is
-   green again. Nothing was calculated in Python — it is the trigger.
+   green again. The bill comes from a trigger, not from Python.
 4. Choose **UPI** → **Record**. Try paying again: refused by the `UNIQUE` key.
 5. **Vehicle entry** with a new plate, e.g. `KA09XY4321` → you get the registration form,
    then it is parked straight away.
@@ -109,30 +116,34 @@ The badge in the top-right corner shows which engine is running.
    **Check in** → red; exit → booking becomes *Completed*.
 7. **Lots & rates** → set a rate to `0` → rejected by `chk_rate`.
 8. **SQL reports** → all 17 queries, now reflecting what you just did.
+9. Back on the paid ticket, **Save review** → stored in MongoDB. Open **MongoDB** → the combined
+   SQL + MongoDB table and the nested queries.
 
-## What was added beyond the report
+## MongoDB setup
 
-The report's scripts (`01`–`03`) are used unchanged. `04_app_extensions.sql` adds what a
-working app needs:
+The app reads the connection from `MONGO_URI`:
 
-- **Booking lifecycle**: a confirmed booking marks its slot *Reserved*; cancelling frees it;
-  `sp_booking_checkin` parks the vehicle in the booked slot; finishing the session marks the
-  booking *Completed*.
-- **Stricter booking check**: besides *Maintenance*, a booking is refused for a slot that is
-  already taken or of the wrong vehicle type.
-- **Safer procedures**: `sp_vehicle_entry` refuses a vehicle that is already parked and returns
-  the new session id; `sp_vehicle_exit` refuses an already-closed session.
-- **Minimum charge of 1 hour** in the billing trigger, so an immediate exit is not billed ₹0
-  (`total_hours` still stores the real duration; the report's 7.12 h → ₹284.80 example is unchanged).
+| `MONGO_URI` | What happens |
+|---|---|
+| not set (default) | In-memory MongoDB (mongomock), filled with sample documents. Zero setup; used by the live demo. |
+| `mongodb://localhost:27017` | Real MongoDB on your laptop (install *MongoDB Community Server*; it runs as a Windows service). |
+| `mongodb+srv://...` | MongoDB Atlas (free cloud cluster). |
 
-## Notes on the sample data
+On first connection the app creates the two collections, inserts the sample documents and the
+unique indexes (`lot_profiles.lot_id`, `reviews.session_id`). If MongoDB can't be reached, the
+MongoDB panels say "unavailable" and everything stored in SQL keeps working.
 
-The report's sample data is loaded as-is, so a few things look odd until you act on them:
+## Design rules (no redundancy, no anomalies)
 
-- Slots **A2**, **B2** (Central Mall) are marked *Occupied* and **T5** (Tech Park) *Reserved*
-  without a matching session or booking. Use **Set available** on the lot page to clear them.
-- Sessions 4 and 5 (Arjun Mehta, Priya Nair) have been "parked" since August 2026, so their
-  running bill is large. Exit them to see the trigger bill weeks of parking.
+- Slot status is **calculated** by `vw_slot_status` (maintenance flag + active session + confirmed booking).
+- `session_status` and `total_hours` are **generated columns** computed from entry and exit time.
+- Removed duplicated columns: `parking_lot.total_slots`, `booking.customer_id`, `booking.booking_date`,
+  `payment.amount_paid`.
+- Unique keys on generated columns: one car per slot, one slot per car, one confirmed booking per slot.
+- Triggers refuse wrong-type or maintenance slots, a pre-booked car using a different slot, paying an
+  unfinished stay, reopening a closed booking, and editing a finished bill.
+- History is protected: sessions, payments, vehicles and customers with history cannot be deleted
+  (`ON DELETE RESTRICT`).
 
 ## Project layout
 
@@ -142,7 +153,8 @@ db.py             MySQL / SQLite connection, procedure calls, error messages
 reports.py        the 17 report queries
 setup_db.py       builds the database (handles DELIMITER blocks)
 test_app.py       end-to-end tests of every workflow (python test_app.py)
-sql/mysql/        01_schema, 02_sample_data, 03_views_triggers_procedures (from the report), 04_app_extensions
+sql/mysql/        01_schema, 02_sample_data, 03_views_triggers_procedures, 04_staff_accounts
+mongo_store.py    MongoDB collections, sample documents and nested queries
 sql/sqlite/       schema.sql — the zero-setup demo copy
 templates/        HTML pages
 static/style.css  styling

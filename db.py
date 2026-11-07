@@ -44,10 +44,10 @@ def _now():
 
 def _sqlite_occupancy(conn):
     def fn(lot_id):
-        cur = conn.execute(
-            "SELECT COUNT(*), SUM(CASE WHEN status='Occupied' THEN 1 ELSE 0 END) "
-            "FROM parking_slot WHERE lot_id = ?", (lot_id,))
-        total, occ = cur.fetchone()
+        # occupied = slots with a car parked now (calculated, same as MySQL)
+        total = conn.execute("SELECT COUNT(*) FROM parking_slot WHERE lot_id = ?", (lot_id,)).fetchone()[0]
+        occ = conn.execute("SELECT COUNT(*) FROM parking_session s JOIN parking_slot sl ON sl.slot_id = s.slot_id "
+                           "WHERE sl.lot_id = ? AND s.exit_time IS NULL", (lot_id,)).fetchone()[0]
         return round((occ or 0) * 100.0 / total, 2) if total else None
     return fn
 
@@ -117,16 +117,36 @@ def _clean(row):
 
 def _wrap(exc):
     """Turn driver errors into a readable DBError message."""
+    unique_rules = {   # unique keys on generated columns -> plain-language rule
+        "active_slot": "Slot is already occupied",
+        "uq_one_car_per_slot": "Slot is already occupied",
+        "active_vehicle": "This vehicle is already parked",
+        "uq_one_slot_per_car": "This vehicle is already parked",
+        "confirmed_slot": "Slot already has a confirmed booking",
+        "uq_one_confirmed_booking_per_slot": "Slot already has a confirmed booking",
+    }
     if ENGINE == "sqlite":
         msg = str(exc)
         if msg.startswith("UNIQUE constraint failed: "):
-            return DBError("Duplicate value: " + msg.split(": ", 1)[1] + " already exists")
+            col = msg.split(": ", 1)[1]
+            for key, text in unique_rules.items():
+                if key in col:
+                    return DBError(text)
+            return DBError("Duplicate value: " + col + " already exists")
+        if msg.startswith("FOREIGN KEY constraint failed"):
+            return DBError("Refused: other records depend on this one (history is protected)")
         return DBError(msg.replace("CHECK constraint failed: ", "Constraint failed: "))
     args = getattr(exc, "args", ())
     if len(args) >= 2:
         code, msg = args[0], args[1]
         if code == 1062:
+            for key, text in unique_rules.items():
+                if key in msg:
+                    return DBError(text)
             return DBError("Duplicate value: " + msg.split("'")[1] + " already exists")
+        if code in (1451, 1452):
+            return DBError("Refused: other records depend on this one (history is protected)"
+                           if code == 1451 else "Refused: the linked record does not exist")
         if code == 3819:
             return DBError("Constraint failed: " + msg)
         return DBError(msg)
@@ -204,16 +224,15 @@ def vehicle_entry(vehicle_id, lot_id):
     v = query("SELECT vehicle_type FROM vehicle WHERE vehicle_id=%s", (vehicle_id,), one=True)
     if not v:
         raise DBError("Vehicle not found")
-    if query("SELECT 1 FROM parking_session WHERE vehicle_id=%s AND session_status='Active'",
-             (vehicle_id,), one=True):
+    if query("SELECT 1 FROM parking_session WHERE active_vehicle=%s", (vehicle_id,), one=True):
         raise DBError("This vehicle is already parked")
-    slot = query("SELECT slot_id FROM parking_slot WHERE lot_id=%s AND slot_type=%s "
+    slot = query("SELECT slot_id FROM vw_slot_status WHERE lot_id=%s AND slot_type=%s "
                  "AND status='Available' ORDER BY floor_number, slot_number LIMIT 1",
                  (lot_id, v["vehicle_type"]), one=True)
     if not slot:
         raise DBError("No available slot for this vehicle type")
-    sid = execute("INSERT INTO parking_session (vehicle_id, slot_id, entry_time, session_status) "
-                  "VALUES (%s, %s, %s, 'Active')", (vehicle_id, slot["slot_id"], _now()))
+    sid = execute("INSERT INTO parking_session (vehicle_id, slot_id, entry_time) "
+                  "VALUES (%s, %s, %s)", (vehicle_id, slot["slot_id"], _now()))
     return {"session_id": sid, "slot_id": slot["slot_id"]}
 
 
@@ -240,14 +259,10 @@ def booking_checkin(booking_id):
         raise DBError("Booking not found")
     if b["booking_status"] != "Confirmed":
         raise DBError("Only confirmed bookings can be checked in")
-    if query("SELECT 1 FROM parking_session WHERE vehicle_id=%s AND session_status='Active'",
-             (b["vehicle_id"],), one=True):
-        raise DBError("This vehicle is already parked")
-    st = query("SELECT status FROM parking_slot WHERE slot_id=%s", (b["slot_id"],), one=True)
-    if st["status"] in ("Occupied", "Maintenance"):
-        raise DBError("Booked slot is not free right now")
-    sid = execute("INSERT INTO parking_session (booking_id, vehicle_id, slot_id, entry_time, session_status) "
-                  "VALUES (%s, %s, %s, %s, 'Active')",
+    # the remaining checks (already parked, slot free, maintenance) are done
+    # by trg_before_session_insert, exactly as in MySQL
+    sid = execute("INSERT INTO parking_session (booking_id, vehicle_id, slot_id, entry_time) "
+                  "VALUES (%s, %s, %s, %s)",
                   (booking_id, b["vehicle_id"], b["slot_id"], _now()))
     return {"session_id": sid, "slot_id": b["slot_id"]}
 

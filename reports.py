@@ -7,11 +7,11 @@ FROM customer c
 JOIN vehicle v ON v.customer_id = c.customer_id
 ORDER BY c.full_name"""),
     ("Q2", "Available slots with their lot name", "JOIN + filter", """
-SELECT pl.lot_name, ps.slot_number, ps.slot_type, ps.status
-FROM parking_slot ps
-JOIN parking_lot pl ON pl.lot_id = ps.lot_id
-WHERE ps.status = 'Available'
-ORDER BY pl.lot_name, ps.slot_number"""),
+SELECT pl.lot_name, ss.slot_number, ss.slot_type, ss.status
+FROM vw_slot_status ss
+JOIN parking_lot pl ON pl.lot_id = ss.lot_id
+WHERE ss.status = 'Available'
+ORDER BY pl.lot_name, ss.slot_number"""),
     ("Q3", "Full session detail: vehicle, customer, slot", "Multi-table JOIN", """
 SELECT s.session_id, c.full_name, v.vehicle_number, pl.lot_name, sl.slot_number,
        s.entry_time, s.exit_time, s.amount_due
@@ -22,7 +22,7 @@ JOIN parking_slot sl ON sl.slot_id = s.slot_id
 JOIN parking_lot pl  ON pl.lot_id = sl.lot_id
 ORDER BY s.entry_time"""),
     ("Q4", "Total revenue collected per lot", "JOIN + GROUP BY + aggregate", """
-SELECT pl.lot_name, COUNT(p.payment_id) AS transactions, SUM(p.amount_paid) AS revenue
+SELECT pl.lot_name, COUNT(p.payment_id) AS transactions, SUM(s.amount_due) AS revenue
 FROM payment p
 JOIN parking_session s ON s.session_id = p.session_id
 JOIN parking_slot sl   ON sl.slot_id = s.slot_id
@@ -30,17 +30,17 @@ JOIN parking_lot pl    ON pl.lot_id = sl.lot_id
 GROUP BY pl.lot_name
 ORDER BY revenue DESC"""),
     ("Q5", "Lots whose revenue exceeds ₹150", "GROUP BY + HAVING", """
-SELECT pl.lot_name, SUM(p.amount_paid) AS revenue
+SELECT pl.lot_name, SUM(s.amount_due) AS revenue
 FROM payment p
 JOIN parking_session s ON s.session_id = p.session_id
 JOIN parking_slot sl   ON sl.slot_id = s.slot_id
 JOIN parking_lot pl    ON pl.lot_id = sl.lot_id
 GROUP BY pl.lot_name
-HAVING SUM(p.amount_paid) > 150
+HAVING SUM(s.amount_due) > 150
 ORDER BY revenue DESC"""),
     ("Q6", "Slot count by vehicle type and status", "GROUP BY on 2 columns", """
 SELECT slot_type, status, COUNT(*) AS slot_count
-FROM parking_slot
+FROM vw_slot_status
 GROUP BY slot_type, status
 ORDER BY slot_type"""),
     ("Q7", "Customers with an ACTIVE parking session", "Subquery with IN", """
@@ -65,7 +65,7 @@ WHERE NOT EXISTS (
     SELECT 1 FROM parking_session s WHERE s.slot_id = sl.slot_id
 )"""),
     ("Q10", "Highest-paying customer overall", "GROUP BY + ORDER BY + LIMIT", """
-SELECT c.full_name, SUM(p.amount_paid) AS total_spent
+SELECT c.full_name, SUM(s.amount_due) AS total_spent
 FROM payment p
 JOIN parking_session s ON s.session_id = p.session_id
 JOIN vehicle v          ON v.vehicle_id = s.vehicle_id
@@ -75,8 +75,8 @@ ORDER BY total_spent DESC
 LIMIT 1"""),
     ("Q11", "Rank customers by total amount spent", "Window function", """
 SELECT c.full_name,
-       SUM(p.amount_paid) AS total_spent,
-       RANK() OVER (ORDER BY SUM(p.amount_paid) DESC) AS spend_rank
+       SUM(s.amount_due) AS total_spent,
+       RANK() OVER (ORDER BY SUM(s.amount_due) DESC) AS spend_rank
 FROM payment p
 JOIN parking_session s ON s.session_id = p.session_id
 JOIN vehicle v          ON v.vehicle_id = s.vehicle_id
@@ -85,16 +85,16 @@ GROUP BY c.full_name"""),
     ("Q12", "Current occupancy % per lot", "Aggregate + arithmetic", """
 SELECT pl.lot_name,
        COUNT(*) AS total_slots,
-       SUM(CASE WHEN ps.status='Occupied' THEN 1 ELSE 0 END) AS occupied,
-       ROUND(SUM(CASE WHEN ps.status='Occupied' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS occupancy_pct
-FROM parking_slot ps
-JOIN parking_lot pl ON pl.lot_id = ps.lot_id
+       SUM(CASE WHEN ss.status='Occupied' THEN 1 ELSE 0 END) AS occupied,
+       ROUND(SUM(CASE WHEN ss.status='Occupied' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS occupancy_pct
+FROM vw_slot_status ss
+JOIN parking_lot pl ON pl.lot_id = ss.lot_id
 GROUP BY pl.lot_name"""),
     ("Q13", "Cancelled bookings with customer and vehicle", "JOIN + WHERE", """
-SELECT b.booking_id, c.full_name, v.vehicle_number, b.booking_date, b.booking_status
+SELECT b.booking_id, c.full_name, v.vehicle_number, DATE(b.start_time) AS booking_date, b.booking_status
 FROM booking b
-JOIN customer c ON c.customer_id = b.customer_id
 JOIN vehicle v  ON v.vehicle_id = b.vehicle_id
+JOIN customer c ON c.customer_id = v.customer_id
 WHERE b.booking_status = 'Cancelled'"""),
     ("Q14", "Vehicles that used more than one lot", "GROUP BY + HAVING + JOIN", """
 SELECT v.vehicle_number, COUNT(DISTINCT pl.lot_id) AS lots_used
@@ -109,8 +109,9 @@ SELECT * FROM vw_slot_availability WHERE slot_type = 'Car'"""),
     ("Q16", "Who is parked right now", "View: vw_active_sessions", """
 SELECT * FROM vw_active_sessions"""),
     ("Q17", "Daily revenue trend", "DATE function + GROUP BY", """
-SELECT DATE(payment_date) AS pay_date, SUM(amount_paid) AS daily_revenue
-FROM payment
-GROUP BY DATE(payment_date)
+SELECT DATE(p.payment_date) AS pay_date, SUM(s.amount_due) AS daily_revenue
+FROM payment p
+JOIN parking_session s ON s.session_id = p.session_id
+GROUP BY DATE(p.payment_date)
 ORDER BY pay_date"""),
 ]

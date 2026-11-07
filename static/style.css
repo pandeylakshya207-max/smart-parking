@@ -246,7 +246,7 @@ select { max-width: 100%; text-overflow: ellipsis; }
 input { min-width: 0; }
 
 /* ---------- signed-in user ---------- */
-.who { display: flex; align-items: center; gap: 10px; padding-left: 14px; border-left: 1px solid #2c3239; }
+.topbar .who { display: flex; align-items: center; gap: 10px; padding-left: 14px; border-left: 1px solid #2c3239; }
 .who-txt { display: flex; flex-direction: column; line-height: 1.2; text-align: right; white-space: nowrap; }
 .who-txt b { color: #fff; font-size: 13px; font-weight: 600; }
 .who-txt span { color: #8d949c; font-size: 11px; }
@@ -289,3 +289,18 @@ input { min-width: 0; }
 }
 td.staff-act { width: 1%; text-align: right; vertical-align: top; }
 td.staff-act form { margin-top: 6px; }
+
+/* review tag picker */
+.tagpick { display: flex; flex-wrap: wrap; gap: 6px; }
+.tagpick label { display: inline-block; }
+.tagpick input { display: none; }
+.tagpick span { display: inline-block; padding: 4px 10px; border: 1.5px solid var(--line-2); border-radius: 20px;
+  font-size: 12px; font-weight: 600; color: var(--ink-2); cursor: pointer; }
+.tagpick input:checked + span { border-color: var(--accent); background: #e7edfc; color: var(--accent); }
+/* MongoDB page */
+pre.json { margin: 0; padding: 14px 16px; background: #0f1a14; color: #c9f2d6; font: 12px/1.55 var(--mono);
+  overflow: auto; max-height: 420px; white-space: pre; border-radius: 0 0 var(--radius) var(--radius); }
+.dbtag { display: inline-block; font: 600 10.5px var(--mono); padding: 2px 7px; border-radius: 5px; margin-right: 4px; }
+.dbtag.sql { background: #e7edfc; color: #1a3d9e; }
+.dbtag.mongo { background: #e3f4ea; color: #105c3a; }
+.amen { display: flex; flex-wrap: wrap; gap: 6px; }

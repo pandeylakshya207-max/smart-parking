@@ -5,6 +5,7 @@ Run:
     DB_ENGINE=sqlite python app.py     # zero-setup demo database
 Then open http://127.0.0.1:5000
 """
+import json
 import os
 import re
 from datetime import datetime, timedelta
@@ -15,7 +16,9 @@ from flask import (Flask, abort, flash, g, jsonify, redirect, render_template,
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import db
+import mongo_store as mongo
 from db import DBError
+from mongo_store import MongoUnavailable
 from reports import REPORT_QUERIES
 
 app = Flask(__name__)
@@ -32,6 +35,8 @@ PUBLIC_ENDPOINTS = {"login", "static"}
 
 VEHICLE_TYPES = ["Car", "Bike", "EV", "Handicap"]
 PAYMENT_MODES = ["UPI", "Cash", "Card", "Wallet"]
+REVIEW_TAGS = ["safe", "clean", "well-lit", "helpful staff", "quick exit", "crowded", "hard to find"]
+CONNECTORS = ["CCS2", "Type 2", "CHAdeMO", "Bharat AC-001"]
 SHIFTS = ["Morning", "Evening", "Night"]
 
 
@@ -76,7 +81,8 @@ def fmt_dt(v):
 
 @app.context_processor
 def inject_globals():
-    return {"engine": db.engine_label(), "now": datetime.now(), "user": g.get("user")}
+    return {"engine": db.engine_label(), "mongo_label": mongo.status_label(),
+            "now": datetime.now(), "user": g.get("user")}
 
 
 # --------------------------------------------------------------------------
@@ -173,15 +179,16 @@ def slot_label(slot_id):
 
 
 def lots_with_slots():
-    lots = db.query("""SELECT lot_id, lot_name, location, total_floors, total_slots, contact_number,
-                              fn_occupancy_percent(lot_id) AS occupancy
-                       FROM parking_lot ORDER BY lot_id""")
-    slots = db.query("""SELECT sl.slot_id, sl.lot_id, sl.slot_number, sl.floor_number, sl.slot_type, sl.status,
-                               v.vehicle_number, s.session_id
-                        FROM parking_slot sl
-                        LEFT JOIN parking_session s ON s.slot_id = sl.slot_id AND s.session_status = 'Active'
-                        LEFT JOIN vehicle v ON v.vehicle_id = s.vehicle_id
-                        ORDER BY sl.lot_id, sl.floor_number, sl.slot_number""")
+    lots = db.query("""SELECT pl.lot_id, pl.lot_name, pl.location, pl.total_floors, pl.contact_number,
+                              (SELECT COUNT(*) FROM parking_slot sl WHERE sl.lot_id = pl.lot_id) AS total_slots,
+                              fn_occupancy_percent(pl.lot_id) AS occupancy
+                       FROM parking_lot pl ORDER BY pl.lot_id""")
+    # status is calculated by the view vw_slot_status — never stored
+    slots = db.query("""SELECT ss.slot_id, ss.lot_id, ss.slot_number, ss.floor_number, ss.slot_type, ss.status,
+                               v.vehicle_number, ss.active_session_id AS session_id
+                        FROM vw_slot_status ss
+                        LEFT JOIN vehicle v ON v.vehicle_id = ss.parked_vehicle_id
+                        ORDER BY ss.lot_id, ss.floor_number, ss.slot_number""")
     for lot in lots:
         lot_slots = [s for s in slots if s["lot_id"] == lot["lot_id"]]
         lot["slots"] = lot_slots
@@ -201,10 +208,13 @@ def dashboard():
     active = db.query("SELECT * FROM vw_active_sessions ORDER BY entry_time DESC")
     for a in active:
         a["hours"] = elapsed_hours(a["entry_time"])
-    revenue = db.query("SELECT COALESCE(SUM(amount_paid),0) AS total, COUNT(*) AS n FROM payment "
-                       "WHERE payment_status = 'Paid'", one=True)
-    today = db.query("SELECT COALESCE(SUM(amount_paid),0) AS total FROM payment "
-                     "WHERE DATE(payment_date) = DATE(NOW()) AND payment_status = 'Paid'", one=True)
+    # the amount is stored once, on the bill (parking_session.amount_due)
+    revenue = db.query("SELECT COALESCE(SUM(s.amount_due),0) AS total, COUNT(*) AS n FROM payment p "
+                       "JOIN parking_session s ON s.session_id = p.session_id "
+                       "WHERE p.payment_status = 'Paid'", one=True)
+    today = db.query("SELECT COALESCE(SUM(s.amount_due),0) AS total FROM payment p "
+                     "JOIN parking_session s ON s.session_id = p.session_id "
+                     "WHERE DATE(p.payment_date) = DATE(NOW()) AND p.payment_status = 'Paid'", one=True)
     unpaid = db.query("""SELECT COUNT(*) AS n FROM parking_session s
                          LEFT JOIN payment p ON p.session_id = s.session_id
                          WHERE s.session_status = 'Completed' AND p.payment_id IS NULL""", one=True)
@@ -261,7 +271,7 @@ def _do_entry(vehicle_id, lot_id):
         flash(f"Entry refused by the database: {e}", "error")
         return redirect(url_for("entry", lot_id=lot_id))
     flash(f"sp_vehicle_entry allocated slot {slot_label(res['slot_id'])}; "
-          f"trg_after_session_insert marked it Occupied.", "success")
+          f"vw_slot_status now shows it as Occupied.", "success")
     return redirect(url_for("session_detail", session_id=res["session_id"]))
 
 
@@ -295,7 +305,7 @@ def sessions():
 def session_detail(session_id):
     s = db.query("""SELECT s.*, v.vehicle_number, v.vehicle_type, v.model_name, v.vehicle_id,
                            c.full_name, c.phone, c.customer_id,
-                           sl.slot_number, sl.floor_number, pl.lot_name, pl.location, pl.contact_number
+                           sl.slot_number, sl.floor_number, sl.lot_id, pl.lot_name, pl.location, pl.contact_number
                     FROM parking_session s
                     JOIN vehicle v       ON v.vehicle_id = s.vehicle_id
                     JOIN customer c      ON c.customer_id = v.customer_id
@@ -312,7 +322,50 @@ def session_detail(session_id):
     elif s["total_hours"] is not None:
         s["billed_hours"] = max(s["total_hours"], 1.0)
     payment = db.query("SELECT * FROM payment WHERE session_id = %s", (session_id,), one=True)
-    return render_template("session.html", s=s, payment=payment, modes=PAYMENT_MODES)
+    review, mongo_error = None, None
+    if payment:                       # reviews live in MongoDB, linked by session_id
+        try:
+            review = mongo.review_for_session(session_id)
+        except MongoUnavailable as e:
+            mongo_error = str(e)
+    return render_template("session.html", s=s, payment=payment, modes=PAYMENT_MODES,
+                           review=review, mongo_error=mongo_error, review_tags=REVIEW_TAGS)
+
+
+@app.route("/sessions/<int:session_id>/review", methods=["POST"])
+def session_review(session_id):
+    """Integrated workflow: SQL proves the visit was paid, MongoDB stores the review."""
+    s = db.query("""SELECT s.session_id, sl.lot_id, v.vehicle_number, p.payment_id
+                    FROM parking_session s
+                    JOIN parking_slot sl ON sl.slot_id = s.slot_id
+                    JOIN vehicle v       ON v.vehicle_id = s.vehicle_id
+                    LEFT JOIN payment p  ON p.session_id = s.session_id
+                    WHERE s.session_id = %s""", (session_id,), one=True)
+    if not s or not s["payment_id"]:
+        flash("Only a paid visit can be reviewed.", "error")
+        return redirect(url_for("session_detail", session_id=session_id))
+    f = request.form
+    try:
+        rating = int(f.get("rating", 0))
+        aspects = {k: int(f.get(k, 0)) for k in ("safety", "cleanliness", "ease_of_parking")}
+    except ValueError:
+        rating, aspects = 0, {}
+    if not 1 <= rating <= 5 or not all(1 <= v <= 5 for v in aspects.values()) or len(aspects) != 3:
+        flash("Give every score from 1 to 5.", "error")
+        return redirect(url_for("session_detail", session_id=session_id))
+    tags = [t for t in f.getlist("tags") if t in REVIEW_TAGS]
+    try:
+        mongo.add_review(session_id, s["lot_id"], s["vehicle_number"], rating,
+                         (f.get("comment") or "").strip()[:300], tags, aspects)
+        flash("Review saved in MongoDB (collection reviews, linked to this session by session_id).", "success")
+    except MongoUnavailable as e:
+        flash(f"MongoDB is unavailable, so the review was not saved. Parking and billing are unaffected. ({e})", "error")
+    except Exception as e:                   # unique index on session_id
+        if "duplicate" in type(e).__name__.lower() or "duplicate" in str(e).lower():
+            flash("This visit already has a review (one review per visit).", "error")
+        else:
+            raise
+    return redirect(url_for("session_detail", session_id=session_id))
 
 
 @app.route("/sessions/<int:session_id>/exit", methods=["POST"])
@@ -325,8 +378,8 @@ def session_exit(session_id):
     s = db.query("SELECT amount_due, total_hours FROM parking_session WHERE session_id = %s",
                  (session_id,), one=True)
     flash(f"sp_vehicle_exit stamped the exit time; trg_before_session_update billed "
-          f"{fmt_duration(s['total_hours'])} = {fmt_inr(s['amount_due'])}, and "
-          f"trg_after_session_exit freed the slot.", "success")
+          f"{fmt_duration(s['total_hours'])} = {fmt_inr(s['amount_due'])}, and the slot "
+          f"is free again.", "success")
     return redirect(url_for("session_detail", session_id=session_id))
 
 
@@ -342,8 +395,9 @@ def session_pay(session_id):
         flash("Choose a payment mode.", "error")
         return redirect(url_for("session_detail", session_id=session_id))
     try:
-        db.execute("INSERT INTO payment (session_id, amount_paid, payment_mode, payment_date, payment_status) "
-                   "VALUES (%s, %s, %s, NOW(), 'Paid')", (session_id, s["amount_due"], mode))
+        # no amount column: the payment settles the session's amount_due
+        db.execute("INSERT INTO payment (session_id, payment_mode, payment_date, payment_status) "
+                   "VALUES (%s, %s, NOW(), 'Paid')", (session_id, mode))
         flash(f"Payment of {fmt_inr(s['amount_due'])} recorded via {mode}.", "success")
     except DBError as e:
         flash(f"Payment not recorded: {e}", "error")
@@ -359,19 +413,19 @@ def bookings():
         vehicle_id = request.form.get("vehicle_id", type=int)
         slot_id = request.form.get("slot_id", type=int)
         start, end = request.form.get("start_time", ""), request.form.get("end_time", "")
-        v = db.query("SELECT customer_id FROM vehicle WHERE vehicle_id = %s", (vehicle_id,), one=True)
+        v = db.query("SELECT vehicle_id FROM vehicle WHERE vehicle_id = %s", (vehicle_id,), one=True)
         if not v or not slot_id or not start or not end:
             flash("Fill in vehicle, slot, start and end time.", "error")
             return redirect(url_for("bookings"))
         try:
             st, en = parse_dt(start), parse_dt(end)
-            bid = db.execute("""INSERT INTO booking (customer_id, vehicle_id, slot_id, booking_date,
-                                                     start_time, end_time, booking_status)
-                                VALUES (%s, %s, %s, %s, %s, %s, 'Confirmed')""",
-                             (v["customer_id"], vehicle_id, slot_id, st.strftime("%Y-%m-%d"),
+            # the customer is the vehicle's owner, and the date is part of start_time
+            bid = db.execute("""INSERT INTO booking (vehicle_id, slot_id, start_time, end_time, booking_status)
+                                VALUES (%s, %s, %s, %s, 'Confirmed')""",
+                             (vehicle_id, slot_id,
                               st.strftime("%Y-%m-%d %H:%M:%S"), en.strftime("%Y-%m-%d %H:%M:%S")))
             flash(f"Booking #{bid} confirmed for slot {slot_label(slot_id)}; "
-                  f"trg_after_booking_insert marked the slot Reserved.", "success")
+                  f"vw_slot_status now shows the slot as Reserved.", "success")
         except ValueError:
             flash("Times must be valid dates.", "error")
         except DBError as e:
@@ -384,17 +438,17 @@ def bookings():
     rows = db.query("""SELECT b.*, c.full_name, v.vehicle_number, v.vehicle_type, sl.slot_number, pl.lot_name,
                               s.session_id
                        FROM booking b
-                       JOIN customer c      ON c.customer_id = b.customer_id
                        JOIN vehicle v       ON v.vehicle_id = b.vehicle_id
+                       JOIN customer c      ON c.customer_id = v.customer_id
                        JOIN parking_slot sl ON sl.slot_id = b.slot_id
                        JOIN parking_lot pl  ON pl.lot_id = sl.lot_id
                        LEFT JOIN parking_session s ON s.booking_id = b.booking_id
                        ORDER BY b.booking_status = 'Confirmed' DESC, b.start_time DESC""")
     vehicles = db.query("""SELECT v.vehicle_id, v.vehicle_number, v.vehicle_type, c.full_name FROM vehicle v
                            JOIN customer c ON c.customer_id = v.customer_id ORDER BY c.full_name""")
-    slots = db.query("""SELECT sl.slot_id, sl.slot_number, sl.slot_type, sl.floor_number, sl.status, sl.lot_id,
-                               pl.lot_name FROM parking_slot sl JOIN parking_lot pl ON pl.lot_id = sl.lot_id
-                        ORDER BY sl.lot_id, sl.slot_number""")
+    slots = db.query("""SELECT ss.slot_id, ss.slot_number, ss.slot_type, ss.floor_number, ss.status, ss.lot_id,
+                               pl.lot_name FROM vw_slot_status ss JOIN parking_lot pl ON pl.lot_id = ss.lot_id
+                        ORDER BY ss.lot_id, ss.slot_number""")
     lots = db.query("SELECT lot_id, lot_name FROM parking_lot ORDER BY lot_id")
     return render_template("bookings.html", rows=rows, vehicles=vehicles, slots=slots, lots=lots)
 
@@ -406,7 +460,7 @@ def booking_cancel(booking_id):
         flash("Only confirmed bookings can be cancelled.", "error")
     else:
         db.execute("UPDATE booking SET booking_status = 'Cancelled' WHERE booking_id = %s", (booking_id,))
-        flash(f"Booking #{booking_id} cancelled; trg_after_booking_cancel released the slot.", "success")
+        flash(f"Booking #{booking_id} cancelled; the slot is free again (status is calculated, not stored).", "success")
     return redirect(url_for("bookings"))
 
 
@@ -522,8 +576,50 @@ def lot_detail(lot_id):
                         LEFT JOIN staff_account sa ON sa.staff_id = st.staff_id
                         WHERE st.lot_id = %s ORDER BY st.staff_id""", (lot_id,))
     revenue = db.query("SELECT * FROM vw_revenue_per_lot WHERE lot_id = %s", (lot_id,), one=True)
+    # MongoDB part of the page, joined to the SQL part by lot_id
+    profile = reviews = rating = mongo_error = None
+    try:
+        profile = mongo.lot_profile(lot_id)
+        reviews = mongo.reviews_for_lot(lot_id)
+        rating = mongo.rating_summary().get(lot_id)
+    except MongoUnavailable as e:
+        mongo_error = str(e)
+    ev_slots = [s["slot_number"] for s in lot["slots"] if s["slot_type"] == "EV"]
     return render_template("lot.html", lot=lot, rates=rates, staff=staff, revenue=revenue,
-                           types=VEHICLE_TYPES, shifts=SHIFTS)
+                           types=VEHICLE_TYPES, shifts=SHIFTS, profile=profile, reviews=reviews,
+                           rating=rating, mongo_error=mongo_error, ev_slots=ev_slots,
+                           connectors=CONNECTORS)
+
+
+@app.route("/lots/<int:lot_id>/chargers", methods=["POST"])
+@manager_required
+def add_charger(lot_id):
+    """Nested update: $push a charger sub-document, after SQL confirms the slot is an EV slot."""
+    f = request.form
+    slot_no = (f.get("slot_number") or "").strip().upper()
+    slot = db.query("SELECT slot_type FROM parking_slot WHERE lot_id = %s AND slot_number = %s",
+                    (lot_id, slot_no), one=True)
+    if not slot or slot["slot_type"] != "EV":
+        flash("Chargers can only be added to an existing EV slot of this lot (checked in SQL).", "error")
+        return redirect(url_for("lot_detail", lot_id=lot_id))
+    try:
+        power = int(f.get("power_kw", 0))
+    except ValueError:
+        power = 0
+    if f.get("connector") not in CONNECTORS or not 3 <= power <= 350:
+        flash("Choose a connector and a power between 3 and 350 kW.", "error")
+        return redirect(url_for("lot_detail", lot_id=lot_id))
+    try:
+        profile = mongo.lot_profile(lot_id) or {}
+        n = len(profile.get("ev_chargers", [])) + 1
+        prefix = "".join(w[0] for w in profile.get("lot_name", "LOT").split()[:2]).upper()
+        mongo.add_ev_charger(lot_id, {"charger_id": f"{prefix}-EV{n}", "slot_number": slot_no,
+                                      "connector": f["connector"], "power_kw": power,
+                                      "network": (f.get("network") or "").strip()[:30] or "Own"})
+        flash(f"Charger added to slot {slot_no} ($push into the nested ev_chargers array).", "success")
+    except MongoUnavailable as e:
+        flash(f"MongoDB is unavailable; charger not added. ({e})", "error")
+    return redirect(url_for("lot_detail", lot_id=lot_id))
 
 
 @app.route("/lots/<int:lot_id>/slots", methods=["POST"])
@@ -531,8 +627,8 @@ def lot_detail(lot_id):
 def add_slot(lot_id):
     f = request.form
     try:
-        db.execute("INSERT INTO parking_slot (lot_id, slot_number, floor_number, slot_type, status) "
-                   "VALUES (%s, %s, %s, %s, 'Available')",
+        db.execute("INSERT INTO parking_slot (lot_id, slot_number, floor_number, slot_type) "
+                   "VALUES (%s, %s, %s, %s)",
                    (lot_id, f["slot_number"].strip().upper(), int(f.get("floor_number") or 1), f["slot_type"]))
         flash(f"Slot {f['slot_number'].upper()} added.", "success")
     except (DBError, ValueError) as e:
@@ -544,27 +640,19 @@ def add_slot(lot_id):
 @manager_required
 def slot_status(slot_id):
     action = request.form.get("action")
-    sl = db.query("SELECT lot_id, status FROM parking_slot WHERE slot_id = %s", (slot_id,), one=True)
+    sl = db.query("SELECT lot_id, status FROM vw_slot_status WHERE slot_id = %s", (slot_id,), one=True)
     if not sl:
         abort(404)
-    active = db.query("SELECT 1 FROM parking_session WHERE slot_id = %s AND session_status = 'Active'",
-                      (slot_id,), one=True)
-    booked = db.query("SELECT 1 FROM booking WHERE slot_id = %s AND booking_status = 'Confirmed'",
-                      (slot_id,), one=True)
+    # Only "under maintenance" is stored; Occupied/Reserved come from sessions and bookings.
     if action == "maintenance":
-        if active or booked:
+        if sl["status"] in ("Occupied", "Reserved"):
             flash("Slot has a parked vehicle or a confirmed booking; it cannot go into maintenance.", "error")
         else:
-            db.execute("UPDATE parking_slot SET status = 'Maintenance' WHERE slot_id = %s", (slot_id,))
-            flash("Slot marked Maintenance. New bookings on it are now blocked by trg_before_booking_insert.", "success")
+            db.execute("UPDATE parking_slot SET under_maintenance = 1 WHERE slot_id = %s", (slot_id,))
+            flash("Slot marked Maintenance. Entries and bookings on it are now refused by the triggers.", "success")
     elif action == "available":
-        if active:
-            flash("A vehicle is parked here. Use Exit on its session instead.", "error")
-        elif booked:
-            flash("This slot holds a confirmed booking. Cancel the booking to release it.", "error")
-        else:
-            db.execute("UPDATE parking_slot SET status = 'Available' WHERE slot_id = %s", (slot_id,))
-            flash("Slot set to Available.", "success")
+        db.execute("UPDATE parking_slot SET under_maintenance = 0 WHERE slot_id = %s", (slot_id,))
+        flash("Maintenance finished; the slot is back in service.", "success")
     return redirect(request.referrer or url_for("lot_detail", lot_id=sl["lot_id"]))
 
 
@@ -636,6 +724,41 @@ def toggle_staff_login(staff_id):
 # --------------------------------------------------------------------------
 # reports
 # --------------------------------------------------------------------------
+@app.route("/mongodb")
+def mongodb_page():
+    """Hybrid view: MongoDB collections, nested queries, and SQL + MongoDB combined by lot_id."""
+    # SQL half of the combined table
+    sql_rows = db.query("""SELECT pl.lot_id, pl.lot_name,
+                                  (SELECT COUNT(*) FROM parking_slot sl WHERE sl.lot_id = pl.lot_id) AS slots,
+                                  fn_occupancy_percent(pl.lot_id) AS occupancy,
+                                  COALESCE(r.total_revenue, 0) AS revenue
+                           FROM parking_lot pl
+                           LEFT JOIN vw_revenue_per_lot r ON r.lot_id = pl.lot_id
+                           ORDER BY pl.lot_id""")
+    ctx = {"sql_rows": sql_rows, "mongo_error": None}
+    try:
+        profiles = mongo.lot_profiles()
+        ratings = mongo.rating_summary()
+        db_ = mongo.get_db()
+        ctx["counts"] = {"lot_profiles": db_.lot_profiles.count_documents({}),
+                         "reviews": db_.reviews.count_documents({})}
+        ctx["sample_profile"] = json.dumps(mongo.sample_document("lot_profiles", "lot_id", 1),
+                                           indent=2, default=str, ensure_ascii=False)
+        ctx["sample_review"] = json.dumps(mongo.sample_document("reviews", "session_id", 2),
+                                          indent=2, default=str, ensure_ascii=False)
+        ctx["queries"] = [dict(q, rows=mongo.run_nested(q)) for q in mongo.NESTED_QUERIES]
+        for r in sql_rows:   # application-level join on lot_id
+            p_ = profiles.get(r["lot_id"], {})
+            rt = ratings.get(r["lot_id"], {})
+            r["chargers"] = len(p_.get("ev_chargers", []))
+            r["open_24h"] = (p_.get("opening_hours") or {}).get("open_24h")
+            r["avg_rating"] = rt.get("avg_rating")
+            r["reviews"] = rt.get("reviews", 0)
+    except MongoUnavailable as e:
+        ctx["mongo_error"] = str(e)
+    return render_template("mongodb.html", **ctx)
+
+
 @app.route("/reports")
 def reports():
     results = []

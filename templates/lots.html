@@ -9,7 +9,7 @@
     <div class="lot-hd" style="margin-bottom:12px"><div class="occ-bar"><i style="width: {{ lot.occupancy or 0 }}%"></i></div><div class="occ-num">{{ '%.0f'|format(lot.occupancy or 0) }}%</div></div>
     <dl class="kv">
       <dt>Floors</dt><dd>{{ lot.total_floors }}</dd>
-      <dt>Capacity</dt><dd>{{ lot.total_slots }} <span class="muted small">({{ lot.slots|length }} slots modelled)</span></dd>
+      <dt>Slots</dt><dd>{{ lot.total_slots }} <span class="muted small">(counted from parking_slot)</span></dd>
       <dt>Free</dt><dd><b style="color:var(--free)">{{ lot.counts.Available }}</b> · occupied {{ lot.counts.Occupied }} · reserved {{ lot.counts.Reserved }} · maintenance {{ lot.counts.Maintenance }}</dd>
       <dt>Contact</dt><dd>{{ lot.contact_number }}</dd>
     </dl>

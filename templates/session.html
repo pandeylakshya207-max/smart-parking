@@ -32,20 +32,21 @@
     </div>
   </div>
 
+  <div class="grid">
   <section class="panel">
     {% if s.session_status == 'Active' %}
       <div class="hd"><h2>Vehicle exit</h2></div>
       <div class="bd">
         <form method="post" action="{{ url_for('session_exit', session_id=s.session_id) }}" class="stack">
           <button class="btn primary lg block">Exit &amp; generate bill</button>
-          <p class="hint">Calls <span class="mono">sp_vehicle_exit({{ s.session_id }})</span>. The trigger chain then computes hours and amount, marks the session Completed and frees slot {{ s.slot_number }}.</p>
+          <p class="hint">Calls <span class="mono">sp_vehicle_exit({{ s.session_id }})</span>. A trigger computes the amount; hours and status are generated from the exit time, and slot {{ s.slot_number }} shows as free again.</p>
         </form>
       </div>
     {% elif payment %}
       <div class="hd"><h2>Payment</h2><span class="pill {{ payment.payment_status }}">{{ payment.payment_status }}</span></div>
       <div class="bd"><dl class="kv">
         <dt>Receipt</dt><dd class="mono">#PAY-{{ '%05d'|format(payment.payment_id) }}</dd>
-        <dt>Amount</dt><dd><b>{{ payment.amount_paid|inr }}</b></dd>
+        <dt>Amount</dt><dd><b>{{ s.amount_due|inr }}</b> <span class="muted small">(the session's bill)</span></dd>
         <dt>Mode</dt><dd>{{ payment.payment_mode }}</dd>
         <dt>Paid on</dt><dd>{{ payment.payment_date|dt }}</dd>
       </dl></div>
@@ -60,5 +61,41 @@
       </div>
     {% endif %}
   </section>
+  {% if payment %}
+  <section class="panel">
+    <div class="hd"><h2>Visit review</h2><span class="dbnote">MongoDB · reviews</span></div>
+    <div class="bd">
+    {% if mongo_error %}
+      <p class="hint" style="margin:0">MongoDB is unavailable right now, so reviews can't be shown or added. Parking, billing and payments keep working because they live in SQL.</p>
+    {% elif review %}
+      <div style="font-size:22px;letter-spacing:2px;color:#e0a100">{{ '★' * review.rating }}<span style="color:var(--line-2)">{{ '★' * (5 - review.rating) }}</span></div>
+      {% if review.comment %}<p style="margin:6px 0 10px">“{{ review.comment }}”</p>{% endif %}
+      <dl class="kv">
+        <dt>Safety</dt><dd>{{ review.aspects.safety }}/5</dd>
+        <dt>Cleanliness</dt><dd>{{ review.aspects.cleanliness }}/5</dd>
+        <dt>Ease of parking</dt><dd>{{ review.aspects.ease_of_parking }}/5</dd>
+        <dt>Tags</dt><dd>{% for t in review.tags %}<span class="pill type">{{ t }}</span> {% else %}—{% endfor %}</dd>
+      </dl>
+      <p class="hint">Stored as one document in <span class="mono">reviews</span>, linked to this SQL session by <span class="mono">session_id</span>.</p>
+    {% else %}
+      <form method="post" action="{{ url_for('session_review', session_id=s.session_id) }}" class="stack">
+        <div class="row">
+          <label>Overall rating<select name="rating">{% for n in [5,4,3,2,1] %}<option value="{{ n }}">{{ n }} ★</option>{% endfor %}</select></label>
+          <label>Safety<select name="safety">{% for n in [5,4,3,2,1] %}<option>{{ n }}</option>{% endfor %}</select></label>
+        </div>
+        <div class="row">
+          <label>Cleanliness<select name="cleanliness">{% for n in [5,4,3,2,1] %}<option>{{ n }}</option>{% endfor %}</select></label>
+          <label>Ease of parking<select name="ease_of_parking">{% for n in [5,4,3,2,1] %}<option>{{ n }}</option>{% endfor %}</select></label>
+        </div>
+        <label>Comment<input name="comment" maxlength="300" placeholder="Optional"></label>
+        <div class="tagpick">{% for t in review_tags %}<label><input type="checkbox" name="tags" value="{{ t }}"><span>{{ t }}</span></label>{% endfor %}</div>
+        <button class="btn primary block">Save review</button>
+        <p class="hint">Saved in MongoDB. SQL first confirms this visit was paid; one review per visit (unique index on session_id).</p>
+      </form>
+    {% endif %}
+    </div>
+  </section>
+  {% endif %}
+  </div>
 </div>
 {% endblock %}

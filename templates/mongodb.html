@@ -1,0 +1,50 @@
+{% extends "base.html" %}{% block title %}MongoDB{% endblock %}
+{% block content %}
+<div class="pagehead"><div><h1>MongoDB: the document side</h1>
+<p>SQL keeps the exact, linked records (sessions, bills, payments). MongoDB keeps data whose shape changes from lot to lot: lot profiles with nested chargers and hours, and free-text reviews.</p></div>
+<span class="engine" style="background:#fff;color:var(--ink-2);border-color:var(--line-2)">{{ mongo_label }}</span></div>
+
+{% if mongo_error %}
+<section class="panel" style="margin-bottom:16px"><div class="hd"><h2>MongoDB is unavailable</h2><span class="pill Cancelled">offline</span></div>
+<div class="bd"><p style="margin:0 0 8px">The application could not reach MongoDB, so this page shows only the SQL half. Parking, billing, bookings and payments are unaffected because they are stored in SQL.</p>
+<p class="dbnote" style="margin:0">{{ mongo_error }}</p></div></section>
+{% endif %}
+
+<section class="panel" style="margin-bottom:16px">
+  <div class="hd"><h2>Combined result: SQL + MongoDB, joined on lot_id</h2><span class="dbnote">application-level join</span></div>
+  <div class="bd flush tablewrap"><table>
+    <thead><tr><th>Lot</th>
+      <th class="num"><span class="dbtag sql">SQL</span>Slots</th><th class="num"><span class="dbtag sql">SQL</span>Occupancy</th><th class="num"><span class="dbtag sql">SQL</span>Revenue</th>
+      <th class="num"><span class="dbtag mongo">Mongo</span>Rating</th><th class="num"><span class="dbtag mongo">Mongo</span>Reviews</th><th class="num"><span class="dbtag mongo">Mongo</span>EV chargers</th><th><span class="dbtag mongo">Mongo</span>24 h</th></tr></thead>
+    <tbody>{% for r in sql_rows %}<tr>
+      <td><a href="{{ url_for('lot_detail', lot_id=r.lot_id) }}"><b>{{ r.lot_name }}</b></a></td>
+      <td class="num">{{ r.slots }}</td><td class="num">{{ '%.0f'|format(r.occupancy or 0) }}%</td><td class="num">{{ r.revenue|inr }}</td>
+      {% if mongo_error %}<td colspan="4" class="muted">unavailable</td>{% else %}
+      <td class="num">{{ '%.1f ★'|format(r.avg_rating) if r.avg_rating else '—' }}</td><td class="num">{{ r.reviews }}</td><td class="num">{{ r.chargers }}</td><td>{{ 'Yes' if r.open_24h else 'No' }}</td>{% endif %}
+    </tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+
+{% if not mongo_error %}
+<div class="grid cols-2" style="margin-bottom:16px">
+  <section class="panel"><div class="hd"><h2>A nested document</h2><span class="dbnote">lot_profiles · {{ counts.lot_profiles }} documents</span></div>
+    <pre class="json">{{ sample_profile }}</pre></section>
+  <section class="panel"><div class="hd"><h2>A review document</h2><span class="dbnote">reviews · {{ counts.reviews }} documents</span></div>
+    <pre class="json">{{ sample_review }}</pre></section>
+</div>
+
+<h2 style="margin:8px 0 12px">Nested document queries</h2>
+{% for q in queries %}
+<section class="panel q" id="{{ q.code }}">
+  <div class="hd"><h2><span class="code">{{ q.code }}</span>{{ q.title }}</h2><span class="pill type">{{ q.concept }}</span></div>
+  <pre class="code" style="white-space:pre-wrap;word-break:break-word">db.{{ q.collection }}.{{ 'aggregate' if q.pipeline else 'find' }}({{ q.query }})</pre>
+  <div class="bd flush tablewrap">
+    {% if q.rows %}<pre class="json" style="max-height:260px;border-radius:0;white-space:pre-wrap;word-break:break-word">{% for r in q.rows %}{{ r|tojson }}
+{% endfor %}</pre>
+    <div class="small muted" style="padding:8px 14px;border-top:1px solid var(--line)">{{ q.rows|length }} document{{ 's' if q.rows|length != 1 }}</div>
+    {% else %}<div class="empty">No documents match.</div>{% endif %}
+  </div>
+</section>
+{% endfor %}
+{% endif %}
+{% endblock %}

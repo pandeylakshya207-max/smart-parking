@@ -18,8 +18,9 @@
     <a href="{{ url_for('customers') }}" class="{{ 'on' if 'customer' in ep }}">Customers</a>
     <a href="{{ url_for('lots') }}" class="{{ 'on' if ep.startswith('lot') }}">Lots &amp; rates</a>
     <a href="{{ url_for('reports') }}" class="{{ 'on' if ep == 'reports' }}">SQL reports</a>
+    <a href="{{ url_for('mongodb_page') }}" class="{{ 'on' if ep == 'mongodb_page' }}">MongoDB</a>
   </nav>
-  <span class="engine">{{ engine }}</span>
+  <span class="engine" title="{{ mongo_label }}">{{ engine }} + {{ mongo_label.replace('MongoDB · ', 'Mongo ') }}</span>
   {% if user %}
   <div class="who">
     <div class="who-txt"><b>{{ user.full_name }}</b><span>{{ user.designation }} · {{ user.lot_name.replace(' Parking','') }}</span></div>

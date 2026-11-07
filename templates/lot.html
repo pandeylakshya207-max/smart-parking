@@ -7,16 +7,68 @@
 <div class="legend"><span class="Available">Available</span><span class="Occupied">Occupied</span><span class="Reserved">Reserved</span><span class="Maintenance">Maintenance</span></div></div>
 <div class="bd">{% include "_lotmap.html" %}</div></section>
 
+{% if mongo_error %}
+<section class="panel" style="margin-bottom:16px"><div class="hd"><h2>Lot profile &amp; reviews</h2><span class="dbnote">MongoDB · offline</span></div>
+<div class="bd"><p class="hint" style="margin:0">MongoDB is unavailable, so the lot profile and reviews can't be shown. Everything above and below comes from SQL and keeps working.</p></div></section>
+{% elif profile %}
+<div class="grid cols-2" style="margin-bottom:16px">
+  <section class="panel"><div class="hd"><h2>Lot profile</h2><span class="dbnote">MongoDB · lot_profiles</span></div>
+    <div class="bd">
+      <p style="margin:0 0 10px">{{ profile.description }}</p>
+      <dl class="kv">
+        <dt>Hours</dt><dd>{% if profile.opening_hours.open_24h %}Open 24 hours{% else %}Weekdays {{ profile.opening_hours.weekdays.open }}–{{ profile.opening_hours.weekdays.close }} · Weekends {{ profile.opening_hours.weekends.open }}–{{ profile.opening_hours.weekends.close }}{% endif %}</dd>
+        <dt>Security</dt><dd>{{ profile.security.guards_per_shift }} guards per shift · {{ profile.security.cctv_cameras }} CCTV cameras</dd>
+        <dt>Amenities</dt><dd><div class="amen">{% for a in profile.amenities %}<span class="pill type">{{ a }}</span>{% endfor %}</div></dd>
+      </dl>
+    </div>
+    <div class="bd flush tablewrap" style="border-top:1px solid var(--line)"><table>
+      <thead><tr><th>EV charger</th><th>Slot</th><th>Connector</th><th class="num">Power</th><th>Network</th></tr></thead>
+      <tbody>{% for c in profile.ev_chargers %}<tr><td class="mono">{{ c.charger_id }}</td><td><b>{{ c.slot_number }}</b></td><td>{{ c.connector }}</td><td class="num">{{ c.power_kw }} kW</td><td>{{ c.network }}</td></tr>
+      {% else %}<tr><td colspan="5" class="empty">No EV chargers at this lot.</td></tr>{% endfor %}</tbody></table></div>
+    {% if user.is_manager and ev_slots %}
+    <form class="stack" method="post" action="{{ url_for('add_charger', lot_id=lot.lot_id) }}" style="padding:16px;border-top:1px solid var(--line)">
+      <div class="row">
+        <label>EV slot<select name="slot_number">{% for sn in ev_slots %}<option>{{ sn }}</option>{% endfor %}</select></label>
+        <label>Connector<select name="connector">{% for cn in connectors %}<option>{{ cn }}</option>{% endfor %}</select></label>
+      </div>
+      <div class="row">
+        <label>Power (kW)<input type="number" name="power_kw" min="3" max="350" value="30" required></label>
+        <label>Network<input name="network" maxlength="30" placeholder="e.g. Tata Power"></label>
+      </div>
+      <button class="btn">Add charger</button>
+      <p class="hint">SQL checks the slot is an EV slot of this lot; MongoDB adds the charger with <span class="mono">$push</span> into the nested array.</p>
+    </form>
+    {% endif %}
+  </section>
+  <section class="panel"><div class="hd"><h2>Customer reviews</h2><span class="dbnote">MongoDB · reviews</span></div>
+    <div class="bd">
+      {% if rating %}
+      <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px"><span style="font-size:30px;font-weight:800">{{ '%.1f'|format(rating.avg_rating) }}</span>
+        <span style="color:#e0a100;font-size:18px">{{ '★' * (rating.avg_rating|round|int) }}</span>
+        <span class="muted small">{{ rating.reviews }} review{{ 's' if rating.reviews != 1 }} · safety {{ '%.1f'|format(rating.avg_safety) }}/5</span></div>
+      {% endif %}
+      {% for r in reviews %}
+      <div style="padding:10px 0;border-top:1px solid var(--line)">
+        <div class="small"><span style="color:#e0a100">{{ '★' * r.rating }}</span> <span class="plate">{{ r.vehicle_number }}</span> <span class="muted">· {{ r.created_at|dt }}</span></div>
+        {% if r.comment %}<div style="margin-top:4px">“{{ r.comment }}”</div>{% endif %}
+        <div style="margin-top:4px">{% for t in r.tags %}<span class="pill type">{{ t }}</span> {% endfor %}</div>
+      </div>
+      {% else %}<p class="muted" style="margin:0">No reviews yet.</p>{% endfor %}
+    </div>
+  </section>
+</div>
+{% endif %}
+
 <div class="grid side">
   <section class="panel"><div class="hd"><h2>Slots</h2></div><div class="bd flush tablewrap"><table>
     <thead><tr><th>Slot</th><th>Floor</th><th>Type</th><th>Status</th><th>Vehicle</th><th></th></tr></thead>
     <tbody>{% for s in lot.slots %}<tr>
       <td class="mono"><b>{{ s.slot_number }}</b></td><td>{{ s.floor_number }}</td><td>{{ s.slot_type }}</td>
       <td><span class="pill {{ s.status }}">{{ s.status }}</span></td>
-      <td>{% if s.vehicle_number %}<a href="{{ url_for('session_detail', session_id=s.session_id) }}"><span class="plate">{{ s.vehicle_number }}</span></a>{% elif s.status == 'Occupied' %}<span class="muted small">no active session</span>{% endif %}</td>
+      <td>{% if s.vehicle_number %}<a href="{{ url_for('session_detail', session_id=s.session_id) }}"><span class="plate">{{ s.vehicle_number }}</span></a>{% endif %}</td>
       <td>{% if user.is_manager %}<form class="inline" method="post" action="{{ url_for('slot_status', slot_id=s.slot_id) }}">
         {% if s.status == 'Available' %}<button class="btn sm" name="action" value="maintenance">Maintenance</button>
-        {% elif not s.vehicle_number %}<button class="btn sm" name="action" value="available">Set available</button>{% endif %}
+        {% elif s.status == 'Maintenance' %}<button class="btn sm" name="action" value="available">End maintenance</button>{% endif %}
       </form>{% endif %}</td>
     </tr>{% endfor %}</tbody></table></div></section>
 

@@ -1,7 +1,7 @@
 {% extends "base.html" %}{% block title %}Dashboard{% endblock %}
 {% block content %}
 <div class="pagehead">
-  <div><h1>Live dashboard</h1><p>Slot states below come straight from <span class="mono">parking_slot.status</span>, kept current by the database triggers. Refreshes every 5 seconds.</p></div>
+  <div><h1>Live dashboard</h1><p>Slot states are calculated live by the view <span class="mono">vw_slot_status</span> from sessions and bookings, so they can never be wrong. Refreshes every 5 seconds.</p></div>
   <div class="actions"><a class="btn primary lg" href="{{ url_for('entry') }}">+ Vehicle entry</a></div>
 </div>
 
